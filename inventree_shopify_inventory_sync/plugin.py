@@ -10,7 +10,7 @@ class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
     SLUG = "shopify-inventory-sync"
     TITLE = "Shopify Inventory Sync"
     DESCRIPTION = "Liest Bestände aus Shopify (per SKU) und bucht Bestandskorrekturen in InvenTree (IPN-Match)."
-    VERSION = "0.0.32"
+    VERSION = "0.0.40"
     AUTHOR = "GrischaMedia / Grischabock (Sandro Geyer)"
     WEBSITE = ""
 
@@ -85,15 +85,25 @@ class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
         },
     }
 
-    # URLs des Plugins registrieren
+    # WICHTIG: Routen direkt hier registrieren – KEINE urls.py
     def setup_urls(self):
-        from . import urls
-        return urls.urlpatterns
+        from django.urls import path
+        from . import views
 
-    # Kompatibler Fallback
+        return [
+            # Nur funktionierende JSON-/Tool-Endpoints, kein Root-Pfad:
+            path("sync-now-open/", views.sync_now_open, name="shopify_sync_now"),
+            path("report-missing/", views.report_missing, name="shopify_sync_missing"),
+            path("debug-sku/", views.debug_sku, name="shopify_debug_sku"),
+            path("sync-json/", views.sync_json, name="shopify_sync_json"),
+            path("save-settings/", views.save_settings, name="shopify_sync_save"),
+        ]
+
+    # Kompatibler Fallback (ältere InvenTree-Versionen)
     def get_urls(self):
         return self.setup_urls()
 
-    # WICHTIG: Der "Open"-Link im Plugin-Dialog zeigt direkt auf /panel/
+    # „Öffnen“-Link im Plugin-Dialog zeigt auf den bewährten JSON-Endpoint (mit ?ui=1)
+    # Falls ?ui=1 vom Reverse-Proxy rausgefiltert wird, öffnet /sync-json/ eben das Roh-JSON.
     def get_plugin_url(self):
-        return f"/plugin/{self.SLUG}/panel/"
+        return f"/plugin/{self.SLUG}/sync-json/?ui=1"

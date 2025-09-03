@@ -39,30 +39,17 @@ def _coerce(value, validator):
     return "" if value is None else str(value)
 
 
-@login_required
-def settings_view_inline(request):
+def _inline_ui_html(plugin, flash=""):
     """
-    Komplette Konfigurationsseite als Inline-HTML unter /plugin/<slug>/panel/
-    GET ?run=1 führt einen Sync aus und zeigt rechts das Live-JSON.
+    Inline-HTML UI (Dark Theme), optional über ?ui=1 abrufbar.
+    Nutzt NUR die bewährten JSON-Endpoints – nichts am Routing ändert sich!
     """
-    p = _plugin()
-    if p is None:
-        return HttpResponseForbidden("Plugin nicht geladen")
-
     global _last_sync_at, _last_sync_result
-
-    flash = ""
-    if request.GET.get("run") == "1":
-        if not _allowed(request.user):
-            return HttpResponseForbidden("Keine Berechtigung")
-        _last_sync_result = run_full_sync(p, request.user)
-        _last_sync_at = now()
-        flash = "Sync ausgeführt."
 
     # Settings einsammeln
     defs_ui = []
-    current = p.get_settings()
-    for key, meta in p.SETTINGS.items():
+    current = plugin.get_settings()
+    for key, meta in plugin.SETTINGS.items():
         defs_ui.append({
             "key": key,
             "name": meta.get("name", key),
@@ -71,6 +58,7 @@ def settings_view_inline(request):
             "validator": meta.get("validator", ""),
         })
 
+    # Zusammenfassung
     def _summarize(res):
         if not res:
             return ""
@@ -83,8 +71,12 @@ def settings_view_inline(request):
     summary = _summarize(_last_sync_result)
     last_sync_at_str = _last_sync_at.strftime("%Y-%m-%d %H:%M:%S") if _last_sync_at else "–"
 
-    # Inline-HTML
-    html_top = f"""<!doctype html>
+    import html as _html
+    import json as _json
+
+    json_pretty = _json.dumps(_last_sync_result or {"info": "Noch kein Ergebnis vorhanden."}, ensure_ascii=False, indent=2)
+
+    top = f"""<!doctype html>
 <html lang="de"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Shopify Sync – Einstellungen</title>
@@ -107,41 +99,33 @@ h1{{margin:0 0 16px 0;font-size:28px}} .grid{{display:grid;grid-template-columns
 </style></head><body>
 <div class="wrap">
   <h1>Shopify Sync – Einstellungen</h1>
-  {"<div class='flash'>" + "Sync ausgeführt." + "</div>" if (flash) else ""}
+  {"<div class='flash'>" + _html.escape(flash) + "</div>" if flash else ""}
   <div class="grid">
     <div class="card">
       <div class="toolbar" style="margin-bottom:10px">
-        <a class="btn" href="?run=1">Sync jetzt starten</a>
+        <a class="btn" href="?ui=1&run=1">Sync jetzt starten</a>
         <a class="btn ghost" href="/plugin/{SLUG}/sync-json/" target="_blank">als JSON öffnen</a>
         <a class="btn ghost" href="/plugin/{SLUG}/report-missing/" target="_blank">fehlende SKUs</a>
-        <span class="tag">Version 0.0.32</span>
+        <span class="tag">Version 0.0.40</span>
       </div>
       <form id="cfg" class="form">
         <dl>"""
 
-    # Felder
-    import html as _html
-    fields_html = []
+    fields = []
     for s in defs_ui:
         val = _html.escape(str(s["value"]) if s["value"] is not None else "")
         desc = f"<div class='small muted'>{_html.escape(s['description'])}</div>" if s["description"] else ""
-        fields_html.append(
+        fields.append(
             f"<dt>{_html.escape(s['name'])}</dt>"
             f"<dd><input class='in' name='{_html.escape(s['key'])}' value=\"{val}\">{desc}</dd>"
         )
 
-    # Rechte Spalte
-    def _json_pretty(data):
-        import json
-        return json.dumps(data, ensure_ascii=False, indent=2)
-
-    json_pretty = _json_pretty(_last_sync_result or {"info": "Noch kein Ergebnis vorhanden."})
-    sum_html = (
-        "<div class='sum-line'>" + "".join([f"<div>{_html.escape(t)}</div>" for t in (summary.split(" ") if summary else [])]) + "</div>"
+    summary_html = (
+        "<div class='sum-line'>" + "".join([f"<div>{_html.escape(t)}</div>" for t in (summary.split(' ') if summary else [])]) + "</div>"
         if summary else "<span class='muted'>Noch kein Lauf gespeichert.</span>"
     )
 
-    html_bottom = f"""</dl>
+    bottom = f"""</dl>
         <div style="margin-top:12px" class="row">
           <button class="btn alt" type="submit">Speichern</button>
           <span class="muted small">Plugin: {SLUG}</span>
@@ -154,7 +138,7 @@ h1{{margin:0 0 16px 0;font-size:28px}} .grid{{display:grid;grid-template-columns
         <div class="muted small">Letzter Sync</div>
         <div class="tag">{last_sync_at_str}</div>
       </div>
-      <div style="margin:6px 0 12px 0">{sum_html}</div>
+      <div style="margin:6px 0 12px 0">{summary_html}</div>
 
       <div class="muted small" style="margin-bottom:6px">Live-Ergebnis</div>
       <pre id="live-pre">{_html.escape(json_pretty)}</pre>
@@ -200,6 +184,7 @@ if (form) {{
       }});
       const j = await r.json();
       alert(j.ok ? 'Gespeichert.' : ('Fehler: ' + (j.error || 'unbekannt')));
+      if (j.ok) window.location.href = '/plugin/{SLUG}/sync-json/?ui=1';
     }} catch (err) {{
       alert('Fehler: ' + err);
     }}
@@ -208,30 +193,7 @@ if (form) {{
 </script>
 </body></html>"""
 
-    return HttpResponse(html_top + "".join(fields_html) + html_bottom)
-
-
-@csrf_exempt
-@login_required
-@user_passes_test(_allowed)
-def save_settings(request):
-    p = _plugin()
-    if p is None:
-        return HttpResponseForbidden("Plugin nicht geladen")
-    if request.method != "POST":
-        return JsonResponse({"ok": False, "error": "POST required"})
-    try:
-        import json
-        payload = json.loads(request.body.decode("utf-8") or "{}")
-    except Exception:
-        payload = {}
-    defs = p.SETTINGS
-    for key, meta in defs.items():
-        raw = payload.get(key, "")
-        vdef = meta.get("validator")
-        coerced = _coerce(raw, vdef)
-        p.set_setting(key, coerced, user=request.user)
-    return JsonResponse({"ok": True})
+    return top + "".join(fields) + bottom
 
 
 @login_required
@@ -280,8 +242,53 @@ def debug_sku(request):
         return JsonResponse({"ok": False, "sku": sku, "error": str(e)})
 
 
+@csrf_exempt
+@login_required
+@user_passes_test(_allowed)
+def save_settings(request):
+    p = _plugin()
+    if p is None:
+        return HttpResponseForbidden("Plugin nicht geladen")
+    if request.method != "POST":
+        return JsonResponse({"ok": False, "error": "POST required"})
+    try:
+        import json
+        payload = json.loads(request.body.decode("utf-8") or "{}")
+    except Exception:
+        payload = {}
+    defs = p.SETTINGS
+    for key, meta in defs.items():
+        raw = payload.get(key, "")
+        vdef = meta.get("validator")
+        coerced = _coerce(raw, vdef)
+        p.set_setting(key, coerced, user=request.user)
+    return JsonResponse({"ok": True})
+
+
 @login_required
 def sync_json(request):
+    """
+    Liefert standardmäßig JSON des letzten Laufs.
+    Mit ?ui=1 wird die Inline-HTML-Konfigurationsseite ausgeliefert.
+    Mit ?run=1 (und ui=1) wird vorher ein Sync abgesetzt.
+    """
+    if request.GET.get("ui") == "1":
+        p = _plugin()
+        if p is None:
+            return HttpResponseForbidden("Plugin nicht geladen")
+
+        flash = ""
+        if request.GET.get("run") == "1":
+            if not _allowed(request.user):
+                return HttpResponseForbidden("Keine Berechtigung")
+            global _last_sync_at, _last_sync_result
+            _last_sync_result = run_full_sync(p, request.user)
+            _last_sync_at = now()
+            flash = "Sync ausgeführt."
+
+        return HttpResponse(_inline_ui_html(p, flash=flash))
+
+    # JSON-Modus
     if _last_sync_result is None:
         return JsonResponse({"ok": False, "error": "no_last_run"})
     return JsonResponse(_last_sync_result)
