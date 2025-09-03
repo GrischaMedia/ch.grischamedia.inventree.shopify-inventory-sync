@@ -1,7 +1,7 @@
 # Shopify → InvenTree Inventory Sync (SKU == IPN)
 
 **Paket:** `ch.grischamedia.inventree.shopify-inventory-sync`  
-**Version:** 0.0.2  
+**Version:** 0.0.3  
 **Autor:** GrischaMedia / Grischabock (Sandro Geyer)
 
 Synct Bestände **einseitig** von **Shopify** nach **InvenTree**:

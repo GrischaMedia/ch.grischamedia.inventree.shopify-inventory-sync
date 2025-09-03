@@ -1,11 +1,20 @@
-# ch.grischamedia.inventree.shopify-inventory-sync/plugin.py
+# inventree/shopify_inventory_sync/plugin.py
 from plugin import InvenTreePlugin
 from plugin.mixins import SettingsMixin, AppMixin
 from django.urls import path
 from django.http import JsonResponse, HttpResponseForbidden
-from django.contrib.auth.decorators import login_required, permission_required
+from django.contrib.auth.decorators import login_required, user_passes_test
 
 from .sync import run_full_sync
+
+
+def _is_allowed(user):
+    """
+    Erlaube Superuser immer; sonst genügt das Recht, StockItems zu ändern.
+    (Verhindert Redirects auf die Startseite.)
+    """
+    return bool(user.is_superuser or user.has_perm("stock.change_stockitem"))
+
 
 class ShopifyInventorySyncPlugin(SettingsMixin, AppMixin, InvenTreePlugin):
     """
@@ -15,18 +24,18 @@ class ShopifyInventorySyncPlugin(SettingsMixin, AppMixin, InvenTreePlugin):
     SLUG = "shopify-inventory-sync"
     TITLE = "Shopify → InvenTree Inventory Sync (SKU == IPN)"
     DESCRIPTION = "Liest Bestände aus Shopify (per SKU) und bucht Bestandskorrekturen in InvenTree (IPN-Match)."
-    VERSION = "0.0.2"
+    VERSION = "0.0.3"
     AUTHOR = "GrischaMedia / Grischabock (Sandro Geyer)"
 
     SETTINGS = {
         "shop_domain": {
             "name": "Shopify Shop Domain",
-            "description": "z. B. my-shop.myshopify.com",
+            "description": "z. B. my-shop.myshopify.com (kann auch via ENV gesetzt werden: SHOPIFY_SHOP_DOMAIN)",
             "default": "",
         },
         "admin_api_token": {
             "name": "Admin API Token",
-            "description": "Shopify Admin API Access Token (Custom App)",
+            "description": "Shopify Admin API Access Token (Custom App) (ENV: SHOPIFY_ADMIN_API_TOKEN)",
             "default": "",
             "protected": True,
         },
@@ -37,7 +46,7 @@ class ShopifyInventorySyncPlugin(SettingsMixin, AppMixin, InvenTreePlugin):
         },
         "inv_target_location": {
             "name": "InvenTree Ziel-Lagerort (ID)",
-            "description": "ID des Lagerorts 'Onlineshop' (dorthin wird gespiegelt)",
+            "description": "ID des Lagerorts 'Onlineshop' (ENV: INVENTREE_TARGET_LOCATION_ID)",
             "default": "",
         },
         "auto_schedule_minutes": {
@@ -67,29 +76,35 @@ class ShopifyInventorySyncPlugin(SettingsMixin, AppMixin, InvenTreePlugin):
         },
     }
 
-    # Manuelle Trigger-Route (Button/URL)
+    # ---- Routing ----
     def get_urls(self):
         return [
+            # „saubere“ Route mit Login + Rechteprüfung
             path("sync-now/", self._wrap(self.sync_now_view), name="shopify_inventory_sync_now"),
+            # offene Debug-/Fallback-Route mit klaren 403 (kein Redirect auf Startseite)
+            path("sync-now-open/", self.sync_now_open_view, name="shopify_inventory_sync_now_open"),
         ]
 
     def _wrap(self, view):
         @login_required
-        @permission_required("stock.change_stockitem", raise_exception=True)
+        @user_passes_test(_is_allowed)
         def wrapped(request, *args, **kwargs):
             return view(request, *args, **kwargs)
         return wrapped
 
+    # ---- Views ----
     def sync_now_view(self, request):
-        if not request.user.is_authenticated:
-            return HttpResponseForbidden()
         result = run_full_sync(self, request.user)
         return JsonResponse(result)
 
+    def sync_now_open_view(self, request):
+        if not request.user.is_authenticated:
+            return HttpResponseForbidden("not authenticated")
+        if not _is_allowed(request.user):
+            return HttpResponseForbidden("insufficient permissions")
+        result = run_full_sync(self, request.user)
+        return JsonResponse(result)
+
+    # Hinweis zu Auto-Sync: wie gehabt extern (Cron) triggern oder Periodic Task nutzen.
     def setup(self, *args, **kwargs):
-        """
-        Hinweis: Auto-Sync bitte extern triggern (z. B. Cron, der die obige URL aufruft),
-        oder über einen Periodic Task, der run_full_sync(self, system_user) ausführt.
-        Das ist stabiler und einfacher zu kontrollieren.
-        """
         pass
