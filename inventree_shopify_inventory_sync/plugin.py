@@ -18,17 +18,16 @@ class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
     VERSION = "0.0.12"
     AUTHOR = "GrischaMedia / Grischabock (Sandro Geyer)"
 
-    # Routen (wie beim funktionierenden In/Out-Plugin über URLS)
     URLS = [
         path("", views.index, name="index"),
         path("ping/", views.ping, name="ping"),
         path("sync-now/", views.sync_now, name="sync-now"),
         path("sync-now-open/", views.sync_now_open, name="sync-now-open"),
-        path("config/", views.settings_form, name="config"),          # eigene, simple Config-Seite
-        path("debug-sku/", views.debug_sku, name="debug-sku"),        # gezieltes SKU-Debug gegen Shopify
+        path("config/", views.settings_form, name="config"),
+        path("debug-sku/", views.debug_sku, name="debug-sku"),
+        path("report-missing/", views.missing_report, name="report-missing"),  # Liste fehlender SKUs
     ]
 
-    # Menü
     def get_menu_items(self, request):
         try:
             allowed = request.user.is_authenticated and (
@@ -47,10 +46,10 @@ class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
             {"name": "Shopify Sync jetzt (open)", "link": reverse(f"{ns}-sync-now-open"), "icon": "fa-sync"},
             {"name": "Shopify Sync jetzt", "link": reverse(f"{ns}-sync-now"), "icon": "fa-sync"},
             {"name": "Debug SKU", "link": reverse(f"{ns}-debug-sku") + "?sku=MB-TEST", "icon": "fa-bug"},
+            {"name": "Report fehlende SKUs", "link": reverse(f"{ns}-report-missing"), "icon": "fa-list"},
             {"name": "Ping", "link": reverse(f"{ns}-ping"), "icon": "fa-circle"},
         ]
 
-    # Settings (explizite Typen, damit auch die Core-UI korrekt wäre)
     SETTINGS = {
         "shop_domain": {
             "name": "Shopify Shop Domain",
@@ -67,13 +66,19 @@ class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
         },
         "use_graphql": {
             "name": "GraphQL verwenden",
-            "description": "Für performantere SKU-Suchen (REST ist stabiler für exakte SKU-Matches)",
+            "description": "Für performantere Suchen (REST ist stabiler für exakte SKU-Matches)",
             "default": False,
             "type": "boolean",
         },
         "inv_target_location": {
             "name": "InvenTree Ziel-Lagerort (ID)",
             "description": "ID des (nicht-strukturellen) Lagerorts für Online-Bestand",
+            "default": "",
+            "type": "string",
+        },
+        "restrict_location_name": {
+            "name": "Nur Standort (Name)",
+            "description": "Wenn gesetzt: es wird nur dieser Shopify-Standort summiert (exakte Namensübereinstimmung).",
             "default": "",
             "type": "string",
         },

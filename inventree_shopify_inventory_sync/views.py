@@ -14,7 +14,6 @@ SLUG = "shopify-inventory-sync"
 
 
 def _allowed(u):
-    """Erlaubt Superuser immer; alternativ reicht das Recht, StockItems zu ändern."""
     try:
         return bool(u.is_superuser or u.has_perm("stock.change_stockitem"))
     except Exception:
@@ -22,11 +21,9 @@ def _allowed(u):
 
 
 def _plugin():
-    """Laufende Plugin-Instanz sicher aus der Registry holen."""
     return registry.get_plugin(SLUG)
 
 
-# --- Health ---
 def ping(request):
     p = _plugin()
     return JsonResponse({
@@ -52,6 +49,7 @@ def index(request):
             "ping": request.build_absolute_uri(f"{base}/ping/"),
             "config": request.build_absolute_uri(f"{base}/config/"),
             "debug_sku": request.build_absolute_uri(f"{base}/debug-sku/?sku=MB-TEST"),
+            "report_missing": request.build_absolute_uri(f"{base}/report-missing/"),
         },
         "perms_ok": _allowed(request.user),
     }
@@ -77,8 +75,7 @@ def sync_now_open(request):
     return JsonResponse(run_full_sync(p, request.user))
 
 
-# --- Eigene, simple Settings-Seite (Superuser-only) ---
-@csrf_exempt  # nur für Superuser; CSRF später möglich
+@csrf_exempt
 @login_required
 def settings_form(request):
     if not request.user.is_superuser:
@@ -93,6 +90,7 @@ def settings_form(request):
         "admin_api_token",
         "use_graphql",
         "inv_target_location",
+        "restrict_location_name",
         "auto_schedule_minutes",
         "delta_guard",
         "dry_run",
@@ -138,6 +136,7 @@ def settings_form(request):
     html.append(row("Admin API Token", "admin_api_token", values.get("admin_api_token", ""), "password"))
     html.append(row("GraphQL verwenden (true/false)", "use_graphql", values.get("use_graphql", False)))
     html.append(row("InvenTree Ziel-Lagerort (ID)", "inv_target_location", values.get("inv_target_location", "")))
+    html.append(row("Nur Standort (Name)", "restrict_location_name", values.get("restrict_location_name", "")))
     html.append(row("Auto-Sync Intervall Minuten", "auto_schedule_minutes", values.get("auto_schedule_minutes", 30)))
     html.append(row("Delta-Guard", "delta_guard", values.get("delta_guard", 500)))
     html.append(row("Dry-Run (true/false)", "dry_run", values.get("dry_run", True)))
@@ -154,7 +153,6 @@ def settings_form(request):
     return HttpResponse("\n".join(html))
 
 
-# --- Gezielt eine SKU gegen Shopify prüfen (REST, exakte Matches) ---
 @login_required
 def debug_sku(request):
     if not request.user.is_superuser:
@@ -181,7 +179,6 @@ def debug_sku(request):
 
     base = f"https://{domain}/admin/api/{api_ver}"
 
-    # 1) exakte Varianten-Suche
     vres = sess.get(f"{base}/variants.json", params={"sku": sku}, timeout=20)
     try:
         vres.raise_for_status()
@@ -206,7 +203,6 @@ def debug_sku(request):
 
     inv_item_id = variant["inventory_item_id"]
 
-    # 2) Locations
     locres = sess.get(f"{base}/locations.json", timeout=20)
     try:
         locres.raise_for_status()
@@ -215,26 +211,28 @@ def debug_sku(request):
 
     locations = (locres.json() or {}).get("locations", []) or []
 
-    # 3) Levels je Location
+    only_name = (p.get_setting("restrict_location_name") or "").strip()
+    if only_name:
+        locations = [l for l in locations if (l.get("name") or "").strip() == only_name]
+
     levels = []
     total = 0
-    for loc in locations:
-        lid = loc.get("id")
-        lname = loc.get("name")
+    loc_ids = ",".join(str(l.get("id")) for l in locations if l.get("id"))
+    if loc_ids:
         lres = sess.get(
             f"{base}/inventory_levels.json",
-            params={"inventory_item_ids": inv_item_id, "location_ids": lid},
+            params={"inventory_item_ids": inv_item_id, "location_ids": loc_ids},
             timeout=20,
         )
         if lres.status_code == 200:
             j = lres.json() or {}
             for lvl in (j.get("inventory_levels") or []):
                 avail = lvl.get("available")
-                levels.append({"location_id": lid, "location_name": lname, "available": avail})
+                # name lookup
+                lname = next((x.get("name") for x in locations if x.get("id") == lvl.get("location_id")), None)
+                levels.append({"location_id": lvl.get("location_id"), "location_name": lname, "available": avail})
                 if avail is not None:
                     total += int(avail)
-        else:
-            levels.append({"location_id": lid, "location_name": lname, "error": f"HTTP {lres.status_code}"})
 
     return JsonResponse({
         "ok": True,
@@ -243,3 +241,31 @@ def debug_sku(request):
         "sum_available": total,
         "levels": levels,
     })
+
+
+@login_required
+def missing_report(request):
+    """Liste aller Parts innerhalb des Filters, deren SKU in Shopify nicht gefunden wird."""
+    if not request.user.is_superuser:
+        return HttpResponseForbidden("superuser required")
+    p = _plugin()
+    if p is None:
+        return HttpResponseForbidden("plugin not loaded")
+
+    from .shopify_client import ShopifyClient
+    client = ShopifyClient(
+        (p.get_setting("shop_domain") or ""),
+        (p.get_setting("admin_api_token") or ""),
+        use_graphql=False,
+    )
+
+    from .sync import _iter_parts
+    missing, present = [], []
+    for part in _iter_parts(p):
+        ipn = (part.IPN or "").strip()
+        if not ipn:
+            continue
+        v = client.find_variant_by_sku(ipn)
+        (missing if not v else present).append({"part": part.pk, "ipn": ipn})
+
+    return JsonResponse({"ok": True, "missing": missing, "present": present})

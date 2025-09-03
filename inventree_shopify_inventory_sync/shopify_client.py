@@ -4,11 +4,8 @@ import requests
 
 API_VERSION = "2024-10"
 
-# Schwellwert: ab 35/40 Calls im Bucket pausieren wir kurz
 _API_BUCKET_HIGH_WATERMARK = 35
-# Basis-Pause wenn nahe am Limit (Sek.)
 _API_GENTLE_SLEEP = 0.6
-# Maximale Backoff-Pause (Sek.)
 _API_MAX_BACKOFF = 5.0
 
 
@@ -24,20 +21,16 @@ class ShopifyClient:
             "Content-Type": "application/json",
         })
 
-        # kleiner Cache für Locations (1x pro Lauf)
         self._locations_cache = None
-
-    # --------------- Low-Level Request mit Rate-Limit-Handling ---------------
 
     def _request(self, method: str, url: str, *, params=None, json=None, timeout=20, max_retries=5) -> requests.Response:
         backoff = 1.0
         last_exc = None
 
-        for attempt in range(max_retries):
+        for _ in range(max_retries):
             try:
                 r = self.session.request(method=method.upper(), url=url, params=params, json=json, timeout=timeout)
 
-                # Rate-Limit-Header auswerten
                 bucket = r.headers.get("X-Shopify-Shop-Api-Call-Limit")
                 if bucket:
                     try:
@@ -45,13 +38,11 @@ class ShopifyClient:
                         if used >= _API_BUCKET_HIGH_WATERMARK:
                             time.sleep(_API_GENTLE_SLEEP)
                     except Exception:
-                        pass  # Header nicht auswertbar -> egal
+                        pass
 
-                # 2xx? -> ok
                 if 200 <= r.status_code < 300:
                     return r
 
-                # 429 -> warten (Retry-After beachten) und erneut
                 if r.status_code == 429:
                     ra = r.headers.get("Retry-After")
                     try:
@@ -63,14 +54,12 @@ class ShopifyClient:
                     last_exc = requests.HTTPError(f"429 Too Many Requests: {url}", response=r)
                     continue
 
-                # 5xx -> Backoff und erneut
                 if 500 <= r.status_code < 600:
                     time.sleep(min(backoff, _API_MAX_BACKOFF))
                     backoff = min(_API_MAX_BACKOFF, backoff * 2.0)
                     last_exc = requests.HTTPError(f"{r.status_code} Server Error: {url}", response=r)
                     continue
 
-                # Andere Fehler -> sofort raisen
                 r.raise_for_status()
                 return r
 
@@ -79,7 +68,6 @@ class ShopifyClient:
                 time.sleep(min(backoff, _API_MAX_BACKOFF))
                 backoff = min(_API_MAX_BACKOFF, backoff * 2.0)
 
-        # nach max_retries
         if isinstance(last_exc, requests.HTTPError):
             raise last_exc
         raise requests.HTTPError(f"Shopify request failed after retries: {url}")
@@ -89,13 +77,7 @@ class ShopifyClient:
         r = self._request("GET", url, params=params)
         return r.json() or {}
 
-    # --------------- Public APIs ---------------
-
     def find_variant_by_sku(self, sku: str) -> dict | None:
-        """
-        Exakte Suche nach Variante per SKU (REST).
-        Nutzt /variants.json?sku=<sku>
-        """
         j = self._rest_get(f"/admin/api/{API_VERSION}/variants.json", params={"sku": sku})
         for v in j.get("variants", []) or []:
             if (v.get("sku") or "").strip() == sku.strip():
@@ -109,25 +91,22 @@ class ShopifyClient:
         return None
 
     def _get_all_locations(self) -> list[dict]:
-        """
-        Liefert alle Locations (mit Cache innerhalb eines Sync-Laufs).
-        """
         if self._locations_cache is not None:
             return self._locations_cache
-
         j = self._rest_get(f"/admin/api/{API_VERSION}/locations.json")
         locs = j.get("locations", []) or []
         self._locations_cache = locs
         return locs
 
-    def inventory_available_sum(self, inventory_item_id: int | str) -> int | None:
-        """
-        Summiert 'available' über alle Locations in EINEM Request.
-        (location_ids als Komma-Liste; reduziert massiv die Zahl der Calls)
-        """
+    def inventory_available_sum(self, inventory_item_id: int | str, only_location_name: str | None = None) -> int | None:
         locs = self._get_all_locations()
         if not locs:
             return None
+
+        if only_location_name:
+            locs = [l for l in locs if (l.get("name") or "").strip() == only_location_name.strip()]
+            if not locs:
+                return 0
 
         loc_ids = ",".join(str(l.get("id")) for l in locs if l.get("id"))
         if not loc_ids:
@@ -139,7 +118,7 @@ class ShopifyClient:
         )
         levels = j.get("inventory_levels", []) or []
         if not levels:
-            return 0  # keine Levels -> 0 verfügbar
+            return 0
 
         total = 0
         for lvl in levels:

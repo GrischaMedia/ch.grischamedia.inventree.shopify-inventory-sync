@@ -10,12 +10,10 @@ from .shopify_client import ShopifyClient
 
 
 def _as_bool(val) -> bool:
-    """Wertet Plugin-Settings robust als Boolean aus."""
     return str(val).strip().lower() in {"1", "true", "on", "yes"}
 
 
 def _ensure_target_location(loc_id: str | int) -> StockLocation | None:
-    """Sichere Ermittlung eines geeigneten Ziel-Lagerorts (kein struktureller)."""
     if not loc_id:
         return None
     try:
@@ -23,7 +21,6 @@ def _ensure_target_location(loc_id: str | int) -> StockLocation | None:
     except Exception:
         return None
 
-    # Falls strukturell → erstes nicht-strukturelles Kind nehmen
     if getattr(loc, "structural", False):
         child = StockLocation.objects.filter(parent=loc, structural=False).first()
         if child:
@@ -34,11 +31,6 @@ def _ensure_target_location(loc_id: str | int) -> StockLocation | None:
 
 
 def _get_or_create_mirror_item(part: Part, location: StockLocation) -> StockItem:
-    """
-    StockItem am Ziel-Lagerort sicherstellen (existiert oder wird mit 0 angelegt).
-
-    Achtung: InvenTree kennt kein Feld 'is_allocated' → nur nach part/location/is_building filtern.
-    """
     item = (
         StockItem.objects
         .filter(part=part, location=location, is_building=False)
@@ -51,7 +43,6 @@ def _get_or_create_mirror_item(part: Part, location: StockLocation) -> StockItem
 
 
 def _iter_parts(plugin) -> Iterable[Part]:
-    """Aktive Teile iterieren, gefiltert nach Kategorie(n) inkl. Unterkategorien."""
     qs = Part.objects.filter(active=True)
 
     cat_ids_str = (plugin.get_setting("filter_category_ids") or "").strip()
@@ -73,14 +64,6 @@ def _iter_parts(plugin) -> Iterable[Part]:
 
 
 def run_full_sync(plugin, user):
-    """
-    Hauptablauf:
-    - Für alle relevanten Parts IPN lesen
-    - SKU in Shopify suchen (exakt via REST)
-    - Bestand summieren
-    - Delta berechnen und ggf. buchen
-    """
-    # Settings
     domain = plugin.get_setting("shop_domain")
     token = plugin.get_setting("admin_api_token")
     use_graphql = _as_bool(plugin.get_setting("use_graphql"))
@@ -88,6 +71,7 @@ def run_full_sync(plugin, user):
     dry_run = _as_bool(plugin.get_setting("dry_run"))
     delta_guard = int(plugin.get_setting("delta_guard") or 0)
     note = plugin.get_setting("note_text") or "Korrektur durch Onlineshop"
+    only_loc_name = (plugin.get_setting("restrict_location_name") or "").strip() or None
 
     if not domain or not token or not loc_id:
         return {"ok": False, "error": "Einstellungen unvollständig (Domain/Token/Ziel-Lagerort)."}
@@ -110,7 +94,6 @@ def run_full_sync(plugin, user):
         if not ipn:
             continue
 
-        # Variante in Shopify suchen
         variant = client.find_variant_by_sku(ipn)
         if not variant:
             preview.append({"part": part.pk, "ipn": ipn, "status": "shopify_variant_not_found"})
@@ -118,7 +101,7 @@ def run_full_sync(plugin, user):
 
         matched += 1
         inv_item_id = variant.get("inventory_item_id") or variant.get("inventoryItemId")
-        target = client.inventory_available_sum(inv_item_id)
+        target = client.inventory_available_sum(inv_item_id, only_location_name=only_loc_name)
         if target is None:
             preview.append({"part": part.pk, "ipn": ipn, "status": "shopify_inventory_error"})
             continue
@@ -127,7 +110,6 @@ def run_full_sync(plugin, user):
         current = int(mirror.quantity or 0)
         delta = int(target) - current
 
-        # Delta-Guard
         if delta_guard and abs(delta) > delta_guard:
             skipped_guard += 1
             preview.append({
