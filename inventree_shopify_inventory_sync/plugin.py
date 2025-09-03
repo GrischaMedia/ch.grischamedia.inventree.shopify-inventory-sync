@@ -1,24 +1,37 @@
 from plugin import InvenTreePlugin
-from plugin.mixins import SettingsMixin, UrlsMixin  # <- URLs brauchen UrlsMixin
-from django.urls import reverse
+from plugin.mixins import SettingsMixin, UrlsMixin
+from django.urls import path, reverse
+
+from . import views  # <— unsere View-Funktionen liegen in views.py
 
 class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
     NAME = "ShopifyInventorySync"
-    SLUG = "shopify-inventory-sync"  # bestimmt den URL-Namespace: plugin:<SLUG>-<name>
+    SLUG = "shopify-inventory-sync"  # → URL-Basis: /plugin/shopify-inventory-sync/
     TITLE = "Shopify → InvenTree Inventory Sync (SKU == IPN)"
     DESCRIPTION = "Liest Bestände aus Shopify (per SKU) und bucht Bestandskorrekturen in InvenTree (IPN-Match)."
-    VERSION = "0.0.13"
+    VERSION = "0.0.12"
     AUTHOR = "GrischaMedia / Grischabock (Sandro Geyer)"
 
-    # Menüeinträge (optional)
+    # ✅ WICHTIG: Routen über URLS registrieren (wie beim funktionierenden Plugin)
+    URLS = [
+        path("", views.index, name="index"),
+        path("ping/", views.ping, name="ping"),
+        path("sync-now/", views.sync_now, name="sync-now"),
+        path("sync-now-open/", views.sync_now_open, name="sync-now-open"),
+    ]
+
+    # (Optional) Menüeinträge – InvenTree baut dir die korrekten Links
     def get_menu_items(self, request):
         try:
-            allowed = request.user.is_authenticated and (request.user.is_superuser or request.user.has_perm("stock.change_stockitem"))
+            allowed = request.user.is_authenticated and (
+                request.user.is_superuser or request.user.has_perm("stock.change_stockitem")
+            )
         except Exception:
             allowed = False
 
         if not allowed:
             return []
+
         ns = f"plugin:{self.SLUG}"
         return [
             {"name": "Shopify Sync – Übersicht", "link": reverse(f"{ns}-index"), "icon": "fa-external-link-alt"},
@@ -27,12 +40,7 @@ class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
             {"name": "Ping", "link": reverse(f"{ns}-ping"), "icon": "fa-circle"},
         ]
 
-    # bindet unsere urls.py ein
-    def get_urls(self):
-        from .urls import urlpatterns
-        return urlpatterns
-
-    # explizite Typen, damit das Settings-Form zuverlässig rendert
+    # ✅ Explizite Typen, damit das Settings-Form sicher rendert
     SETTINGS = {
         "shop_domain": {"name": "Shopify Shop Domain", "description": "z. B. my-shop.myshopify.com", "default": "", "type": "string"},
         "admin_api_token": {"name": "Admin API Token", "description": "Shopify Admin API Access Token", "default": "", "protected": True, "type": "string"},
