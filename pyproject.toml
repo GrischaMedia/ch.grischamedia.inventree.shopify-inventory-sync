@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ch.grischamedia.inventree.shopify-inventory-sync"
-version = "0.0.19"
+version = "0.0.20"
 description = "Shopify → InvenTree Inventory Sync (SKU == IPN) via Stock Adjustments"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -9,6 +9,11 @@ from stock.models import StockItem, StockLocation
 from .shopify_client import ShopifyClient
 
 
+def _as_bool(val) -> bool:
+    """Wertet Plugin-Settings robust als Boolean aus."""
+    return str(val).strip().lower() in {"1", "true", "on", "yes"}
+
+
 def _ensure_target_location(loc_id: str | int) -> StockLocation | None:
     """Sichere Ermittlung eines geeigneten Ziel-Lagerorts (kein struktureller)."""
     if not loc_id:
@@ -18,12 +23,11 @@ def _ensure_target_location(loc_id: str | int) -> StockLocation | None:
     except Exception:
         return None
 
-    # Falls strukturell: erstes nicht-strukturelles Kind verwenden (oder None)
+    # Falls strukturell → erstes nicht-strukturelles Kind nehmen
     if getattr(loc, "structural", False):
         child = StockLocation.objects.filter(parent=loc, structural=False).first()
         if child:
             return child
-        # optional: hier könnte man automatisch ein Kind anlegen – bewusst ausgelassen
         return None
 
     return loc
@@ -33,8 +37,7 @@ def _get_or_create_mirror_item(part: Part, location: StockLocation) -> StockItem
     """
     StockItem am Ziel-Lagerort sicherstellen (existiert oder wird mit 0 angelegt).
 
-    Hinweis: Manche InvenTree-Versionen besitzen KEIN Feld 'is_allocated'.
-    Darum filtern wir nur nach part/location und is_building.
+    Achtung: InvenTree kennt kein Feld 'is_allocated' → nur nach part/location/is_building filtern.
     """
     item = (
         StockItem.objects
@@ -66,7 +69,6 @@ def _iter_parts(plugin) -> Iterable[Part]:
             if all_ids:
                 qs = qs.filter(category_id__in=all_ids)
 
-    # Iterator, um Speicher zu schonen
     return qs.iterator()
 
 
@@ -74,21 +76,19 @@ def run_full_sync(plugin, user):
     """
     Hauptablauf:
     - Für alle relevanten Parts IPN lesen
-    - SKU in Shopify suchen (exakt)
-    - Bestand (über alle Locations) summieren
-    - Delta = target - current am Ziel-Lagerort
-    - ggf. buchen (oder Dry-Run)
+    - SKU in Shopify suchen (exakt via REST)
+    - Bestand summieren
+    - Delta berechnen und ggf. buchen
     """
-    # Settings holen
+    # Settings
     domain = plugin.get_setting("shop_domain")
     token = plugin.get_setting("admin_api_token")
-    use_graphql = bool(plugin.get_setting("use_graphql"))
+    use_graphql = _as_bool(plugin.get_setting("use_graphql"))
     loc_id = plugin.get_setting("inv_target_location")
-    dry_run = bool(plugin.get_setting("dry_run"))
+    dry_run = _as_bool(plugin.get_setting("dry_run"))
     delta_guard = int(plugin.get_setting("delta_guard") or 0)
     note = plugin.get_setting("note_text") or "Korrektur durch Onlineshop"
 
-    # Plausibilitätscheck
     if not domain or not token or not loc_id:
         return {"ok": False, "error": "Einstellungen unvollständig (Domain/Token/Ziel-Lagerort)."}
 
@@ -110,27 +110,24 @@ def run_full_sync(plugin, user):
         if not ipn:
             continue
 
-        # Variante in Shopify finden (exakte SKU)
+        # Variante in Shopify suchen
         variant = client.find_variant_by_sku(ipn)
         if not variant:
             preview.append({"part": part.pk, "ipn": ipn, "status": "shopify_variant_not_found"})
             continue
 
         matched += 1
-
-        inv_item_id = variant.get("inventoryItemId") or variant.get("inventory_item_id")
+        inv_item_id = variant.get("inventory_item_id") or variant.get("inventoryItemId")
         target = client.inventory_available_sum(inv_item_id)
         if target is None:
             preview.append({"part": part.pk, "ipn": ipn, "status": "shopify_inventory_error"})
             continue
 
-        # Spiegel-Item am Ziel-Lagerort
         mirror = _get_or_create_mirror_item(part, target_location)
-
         current = int(mirror.quantity or 0)
         delta = int(target) - current
 
-        # Delta-Guard?
+        # Delta-Guard
         if delta_guard and abs(delta) > delta_guard:
             skipped_guard += 1
             preview.append({
@@ -139,7 +136,6 @@ def run_full_sync(plugin, user):
             })
             continue
 
-        # Buchen (oder Dry-Run)
         if dry_run or delta == 0:
             preview.append({
                 "part": part.pk, "ipn": ipn, "current": current, "target": int(target),
@@ -147,11 +143,9 @@ def run_full_sync(plugin, user):
             })
         else:
             with transaction.atomic():
-                # Versuch: offizielle Methode adjustStock (falls vorhanden)
                 try:
                     mirror.adjustStock(delta, user=user, notes=note)  # type: ignore[attr-defined]
                 except Exception:
-                    # Fallback: Menge direkt setzen (ohne Historie, simpel & robust)
                     mirror.quantity = int(target)
                     mirror.save()
             changed += 1
@@ -167,5 +161,5 @@ def run_full_sync(plugin, user):
         "sku_matched": matched,
         "changed": changed,
         "skipped_delta_guard": skipped_guard,
-        "details_preview": preview[:100],  # nicht zu groß werden lassen
+        "details_preview": preview[:100],
     }
