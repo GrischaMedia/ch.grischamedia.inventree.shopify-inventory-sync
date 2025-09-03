@@ -3,21 +3,18 @@ from plugin.mixins import SettingsMixin
 
 
 class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
-    """
-    Shopify → InvenTree Bestandsabgleich (SKU == IPN)
-    """
     NAME = "ShopifyInventorySync"
     SLUG = "shopify-inventory-sync"
     TITLE = "Shopify Inventory Sync"
-    DESCRIPTION = "Liest Bestände aus Shopify (per SKU) und bucht Bestandskorrekturen in InvenTree (IPN-Match)."
-    VERSION = "0.0.30"
+    DESCRIPTION = "Shopify → InvenTree Bestandsabgleich (SKU == IPN)."
+    VERSION = "0.0.31"
     AUTHOR = "GrischaMedia / Grischabock (Sandro Geyer)"
     WEBSITE = ""
 
     SETTINGS = {
         "shop_domain": {
             "name": "Shopify Shop Domain",
-            "description": "Dein *.myshopify.com ohne https://",
+            "description": "*.myshopify.com (ohne https://)",
             "default": "",
         },
         "admin_token": {
@@ -28,7 +25,7 @@ class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
         },
         "use_graphql": {
             "name": "GraphQL verwenden (true/false)",
-            "description": "Wenn true, wird GraphQL benutzt (sonst REST).",
+            "description": "Wenn true, GraphQL statt REST.",
             "validator": "bool",
             "default": False,
         },
@@ -40,12 +37,12 @@ class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
         },
         "only_location_name": {
             "name": "Nur Standort (Name)",
-            "description": "Nur diese Shopify-Location zählen (z.B. Domleschgerstrasse 22). Leer = alle addieren.",
+            "description": "Nur diese Shopify-Location zählen (leer = alle).",
             "default": "",
         },
         "auto_sync_minutes": {
             "name": "Auto-Sync Intervall Minuten",
-            "description": "0 = aus. Ansonsten periodischer Sync.",
+            "description": "0 = aus.",
             "validator": "int",
             "default": 0,
         },
@@ -57,7 +54,7 @@ class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
         },
         "dry_run": {
             "name": "Dry-Run (true/false)",
-            "description": "Wenn true, werden keine Buchungen durchgeführt.",
+            "description": "Wenn true, keine Buchungen.",
             "validator": "bool",
             "default": True,
         },
@@ -68,7 +65,7 @@ class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
         },
         "only_categories": {
             "name": "Nur Kategorien (IDs, komma-getrennt)",
-            "description": "Nur diese Teil-Kategorien berücksichtigen (inkl. Unterkategorien).",
+            "description": "Nur diese Teil-Kategorien (inkl. Unterkategorien).",
             "default": "",
         },
         "throttle_ms": {
@@ -85,18 +82,13 @@ class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
         },
     }
 
-    # === URL-Einbindung ===
     def setup_urls(self):
         from . import urls
         return urls.urlpatterns
 
-    # Kompatibilität zu älteren/anderen InvenTree-Versionen:
     def get_urls(self):
         return self.setup_urls()
 
     def get_plugin_url(self):
-        """
-        Zeigt im Plugin-Dialog immer auf den Root-Pfad des Plugins.
-        Kein reverse(), keine Unterroute wie 'settings/'.
-        """
+        # Zeige im Plugin-Dialog direkt auf den Root-Pfad des Plugins
         return f"/plugin/{self.SLUG}/"
