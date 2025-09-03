@@ -18,7 +18,7 @@ class ShopifyInventorySyncPlugin(SettingsMixin, AppMixin, InvenTreePlugin):
     SLUG = "shopify-inventory-sync"
     TITLE = "Shopify → InvenTree Inventory Sync (SKU == IPN)"
     DESCRIPTION = "Liest Bestände aus Shopify (per SKU) und bucht Bestandskorrekturen in InvenTree (IPN-Match)."
-    VERSION = "0.0.6"
+    VERSION = "0.0.7"
     AUTHOR = "GrischaMedia / Grischabock (Sandro Geyer)"
 
     # --- EXPLIZITE TYPEN -> Settings-Form rendert zuverlässig ---
