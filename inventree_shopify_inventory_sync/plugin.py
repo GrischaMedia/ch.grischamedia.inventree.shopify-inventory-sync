@@ -1,8 +1,6 @@
 from plugin import InvenTreePlugin
 from plugin.mixins import SettingsMixin
-from plugin.registry import registry
 
-from django.urls import reverse
 
 class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
     """
@@ -12,7 +10,7 @@ class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
     SLUG = "shopify-inventory-sync"
     TITLE = "Shopify Inventory Sync"
     DESCRIPTION = "Liest Bestände aus Shopify (per SKU) und bucht Bestandskorrekturen in InvenTree (IPN-Match)."
-    VERSION = "0.0.27"
+    VERSION = "0.0.28"
     AUTHOR = "GrischaMedia / Grischabock (Sandro Geyer)"
     WEBSITE = ""
 
@@ -66,7 +64,7 @@ class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
         "booking_note": {
             "name": "Buchungsnotiz",
             "description": "Text für Stock Adjustments.",
-            "default": "Onlineshop",
+            "default": "Korrektur durch Onlineshop",
         },
         "only_categories": {
             "name": "Nur Kategorien (IDs, komma-getrennt)",
@@ -91,9 +89,9 @@ class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
         from . import urls
         return urls.urlpatterns
 
-    # Link im Plugin-Dialog auf unsere hübsche Einstellungsseite
     def get_plugin_url(self):
-        try:
-            return reverse("shopify_sync_settings")
-        except Exception:
-            return None
+        """
+        Immer direkt auf die Settings-Unterseite zeigen.
+        Kein reverse(); statischer Pfad ist in allen Setups stabil.
+        """
+        return f"/plugin/{self.SLUG}/settings/"

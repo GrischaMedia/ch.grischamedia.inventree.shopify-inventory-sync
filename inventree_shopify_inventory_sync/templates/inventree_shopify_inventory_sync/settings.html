@@ -40,7 +40,6 @@
     .in{width:100%; padding:10px 12px; border-radius:10px; border:1px solid var(--border); background:#0f1733; color:var(--text)}
     .small{font-size:12px}
     pre{white-space:pre-wrap; word-break:break-word; background:#0d142b; border:1px solid var(--border); border-radius:10px; padding:12px; max-height:60vh; overflow:auto}
-    .two-col{display:grid; grid-template-columns: 1fr; gap:16px}
     .sticky{position:sticky; top:16px}
     .sum-line{display:flex; gap:18px; flex-wrap:wrap}
     .sum-line div{background:#0d1530; border:1px solid var(--border); padding:8px 10px; border-radius:10px}
@@ -66,7 +65,7 @@
         <form method="post" class="form">
           {% csrf_token %}
           <dl>
-            {% for s in plugin.settings_definition %}
+            {% for s in plugin_settings %}
               <dt>{{ s.name }}</dt>
               <dd>
                 <input class="in" name="{{ s.key }}" value="{{ s.value|default_if_none:'' }}">

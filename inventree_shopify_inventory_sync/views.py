@@ -1,4 +1,8 @@
-from django.http import JsonResponse, HttpResponse, HttpResponseForbidden
+from django.http import (
+    JsonResponse,
+    HttpResponseForbidden,
+    HttpResponseRedirect,
+)
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.shortcuts import render
 from django.utils.timezone import now
@@ -9,11 +13,15 @@ from .sync import run_full_sync, report_missing_skus
 from .shopify_client import ShopifyClient
 
 SLUG = "shopify-inventory-sync"
+
+# Letztes Ergebnis im Speicher (nur UI-Anzeige)
 _last_sync_result = None
 _last_sync_at = None
 
+
 def _plugin():
     return registry.get_plugin(SLUG)
+
 
 def _allowed(u):
     try:
@@ -21,32 +29,88 @@ def _allowed(u):
     except Exception:
         return False
 
+
+def index_redirect(request):
+    """ /plugin/<slug>/  ->  /plugin/<slug>/settings/ """
+    return HttpResponseRedirect(f"/plugin/{SLUG}/settings/")
+
+
+def _coerce(value, validator):
+    """Werte aus dem POST in den richtigen Typ umwandeln."""
+    if validator == "bool":
+        if isinstance(value, bool):
+            return value
+        v = str(value or "").strip().lower()
+        return v in ("1", "true", "yes", "on", "y")
+    if validator == "int":
+        try:
+            return int(str(value).strip() or "0")
+        except Exception:
+            return 0
+    # string / default
+    return "" if value is None else str(value)
+
+
 @login_required
 def settings_view(request):
+    """
+    Konfigurationsseite mit linkem Settings-Panel und rechtem Live-Panel.
+    POST speichert alle Settings über set_setting().
+    GET mit ?run=1 startet einen Sync und zeigt das Ergebnis rechts an.
+    """
     p = _plugin()
     if p is None:
         return HttpResponseForbidden("Plugin nicht geladen")
 
-    # „Sync jetzt starten“ via Button (GET) – bewusst idempotent gehalten
     flash = None
+
+    # Speichern der Settings (alle Felder, die im Template ausgegeben werden)
+    if request.method == "POST":
+        defs = p.get_settings()  # liefert {key: SettingObject}
+        for key, meta in defs.items():
+            raw = request.POST.get(key, "")
+            # Validator aus Plugin-Definition ermitteln
+            vdef = None
+            try:
+                vdef = p.SETTINGS.get(key, {}).get("validator", None)
+            except Exception:
+                vdef = None
+            coerced = _coerce(raw, vdef)
+            p.set_setting(key, coerced, user=request.user)
+        flash = "Einstellungen gespeichert."
+
+    # "Sync jetzt starten" via Button
     if request.GET.get("run") == "1":
         if not _allowed(request.user):
             return HttpResponseForbidden("Keine Berechtigung")
         global _last_sync_at, _last_sync_result
         _last_sync_result = run_full_sync(p, request.user)
         _last_sync_at = now()
-        flash = "Sync ausgeführt."
+        flash = (flash + " " if flash else "") + "Sync ausgeführt."
+
+    # Settings + aktuelle Werte für das Formular aufbereiten
+    defs = []
+    current = p.get_settings()
+    for key, meta in p.SETTINGS.items():
+        defs.append({
+            "key": key,
+            "name": meta.get("name", key),
+            "description": meta.get("description", ""),
+            "value": current.get(key).value if key in current else meta.get("default", ""),
+        })
 
     ctx = {
         "plugin": p,
         "slug": SLUG,
         "version": getattr(p, "VERSION", "n/a"),
+        "flash": flash,
+        "plugin_settings": defs,           # <- fürs Template
         "last_sync_at": _last_sync_at,
         "last_sync_summary": _summarize(_last_sync_result) if _last_sync_result else None,
         "last_sync_json": _last_sync_result,
-        "flash": flash,
     }
     return render(request, "inventree_shopify_inventory_sync/settings.html", ctx)
+
 
 def _summarize(res):
     if not res:
@@ -57,17 +121,18 @@ def _summarize(res):
     processed = res.get("processed", res.get("total_parts", 0))
     return f"ok={ok} matched={matched} changed={changed} processed={processed}"
 
+
 @login_required
 @user_passes_test(_allowed)
 def sync_now_open(request):
     p = _plugin()
     if p is None:
         return HttpResponseForbidden("Plugin nicht geladen")
-
     global _last_sync_at, _last_sync_result
     _last_sync_result = run_full_sync(p, request.user)
     _last_sync_at = now()
     return JsonResponse(_last_sync_result)
+
 
 @login_required
 @user_passes_test(_allowed)
@@ -76,6 +141,7 @@ def report_missing(request):
     if p is None:
         return HttpResponseForbidden("Plugin nicht geladen")
     return JsonResponse(report_missing_skus(p))
+
 
 @login_required
 @user_passes_test(_allowed)
@@ -101,9 +167,9 @@ def debug_sku(request):
     except Exception as e:
         return JsonResponse({"ok": False, "sku": sku, "error": str(e)})
 
+
 @login_required
 def sync_json(request):
-    """Hilfs-Endpoint: letztes Ergebnis als JSON"""
     if _last_sync_result is None:
         return JsonResponse({"ok": False, "error": "no_last_run"})
     return JsonResponse(_last_sync_result)
