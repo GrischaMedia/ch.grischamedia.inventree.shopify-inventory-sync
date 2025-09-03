@@ -1,139 +1,99 @@
-# inventree_shopify_inventory_sync/plugin.py
-
 from plugin import InvenTreePlugin
-from plugin.mixins import SettingsMixin, UrlsMixin
-from django.urls import path, reverse
-from . import views
+from plugin.mixins import SettingsMixin
+from plugin.registry import registry
 
+from django.urls import reverse
 
-class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
+class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
     """
     Shopify → InvenTree Bestandsabgleich (SKU == IPN)
     """
     NAME = "ShopifyInventorySync"
     SLUG = "shopify-inventory-sync"
-    TITLE = "Shopify → InvenTree Inventory Sync (SKU == IPN)"
+    TITLE = "Shopify Inventory Sync"
     DESCRIPTION = "Liest Bestände aus Shopify (per SKU) und bucht Bestandskorrekturen in InvenTree (IPN-Match)."
-    VERSION = "0.0.26"
+    VERSION = "0.0.27"
     AUTHOR = "GrischaMedia / Grischabock (Sandro Geyer)"
-
-    URLS = [
-        path("", views.index, name="index"),
-        path("ping/", views.ping, name="ping"),
-        path("sync-now/", views.sync_now, name="sync-now"),
-        path("sync-now-open/", views.sync_now_open, name="sync-now-open"),
-        path("config/", views.settings_form, name="config"),
-        path("debug-sku/", views.debug_sku, name="debug-sku"),
-        path("report-missing/", views.missing_report, name="report-missing"),
-    ]
-
-    def get_menu_items(self, request):
-        try:
-            allowed = request.user.is_authenticated and (
-                request.user.is_superuser or request.user.has_perm("stock.change_stockitem")
-            )
-        except Exception:
-            allowed = False
-
-        if not allowed:
-            return []
-
-        ns = f"plugin:{self.SLUG}"
-        return [
-            {"name": "Shopify Sync – Übersicht", "link": reverse(f"{ns}-index"), "icon": "fa-external-link-alt"},
-            {"name": "Shopify Sync – Config", "link": reverse(f"{ns}-config"), "icon": "fa-cog"},
-            {"name": "Shopify Sync jetzt (open)", "link": reverse(f"{ns}-sync-now-open"), "icon": "fa-sync"},
-            {"name": "Shopify Sync jetzt", "link": reverse(f"{ns}-sync-now"), "icon": "fa-sync"},
-            {"name": "Debug SKU", "link": reverse(f"{ns}-debug-sku") + "?sku=MB-TEST", "icon": "fa-bug"},
-            {"name": "Report fehlende SKUs", "link": reverse(f"{ns}-report-missing"), "icon": "fa-list"},
-            {"name": "Ping", "link": reverse(f"{ns}-ping"), "icon": "fa-circle"},
-        ]
+    WEBSITE = ""
 
     SETTINGS = {
         "shop_domain": {
             "name": "Shopify Shop Domain",
-            "description": "z. B. my-shop.myshopify.com (ohne https://)",
+            "description": "Dein *.myshopify.com ohne https://",
             "default": "",
-            "type": "string",
         },
-        "admin_api_token": {
+        "admin_token": {
             "name": "Admin API Token",
             "description": "Shopify Admin API Access Token",
+            "validator": "string",
             "default": "",
-            "protected": True,
-            "type": "string",
         },
         "use_graphql": {
-            "name": "GraphQL verwenden",
-            "description": "REST + GraphQL-Fallback für Variantensuche",
-            "default": True,
-            "type": "boolean",
+            "name": "GraphQL verwenden (true/false)",
+            "description": "Wenn true, wird GraphQL benutzt (sonst REST).",
+            "validator": "bool",
+            "default": False,
         },
-        "inv_target_location": {
+        "target_location_id": {
             "name": "InvenTree Ziel-Lagerort (ID)",
-            "description": "Nicht-struktureller Lagerort für Online-Bestand",
-            "default": "",
-            "type": "string",
+            "description": "Nicht-struktureller Lagerort für Shop-Bestände (z.B. 143).",
+            "validator": "int",
+            "default": 0,
         },
-        "restrict_location_name": {
+        "only_location_name": {
             "name": "Nur Standort (Name)",
-            "description": "Nur dieser Shopify-Standort wird summiert (optional)",
+            "description": "Nur diese Shopify-Location zählen (z.B. Domleschgerstrasse 22). Leer = alle addieren.",
             "default": "",
-            "type": "string",
         },
-        "auto_schedule_minutes": {
-            "name": "Auto-Sync Intervall (Minuten)",
-            "description": "0 = aus",
-            "default": 5,
-            "type": "integer",
+        "auto_sync_minutes": {
+            "name": "Auto-Sync Intervall Minuten",
+            "description": "0 = aus. Ansonsten periodischer Sync.",
+            "validator": "int",
+            "default": 0,
         },
         "delta_guard": {
-            "name": "Delta-Limit pro Artikel",
-            "description": "0 = aus",
+            "name": "Delta-Guard",
+            "description": "Max. Differenz pro Artikel. 0 = aus.",
+            "validator": "int",
             "default": 500,
-            "type": "integer",
         },
         "dry_run": {
-            "name": "Dry-Run",
-            "description": "Nur lesen, keine Buchungen",
+            "name": "Dry-Run (true/false)",
+            "description": "Wenn true, werden keine Buchungen durchgeführt.",
+            "validator": "bool",
             "default": True,
-            "type": "boolean",
         },
-        "note_text": {
+        "booking_note": {
             "name": "Buchungsnotiz",
-            "description": "Notiz für Stock-Adjustments",
-            "default": "Korrektur durch Onlineshop",
-            "type": "string",
+            "description": "Text für Stock Adjustments.",
+            "default": "Onlineshop",
         },
-        "filter_category_ids": {
+        "only_categories": {
             "name": "Nur Kategorien (IDs, komma-getrennt)",
-            "description": "Leerlassen = alle aktiven Teile",
+            "description": "Nur diese Teil-Kategorien berücksichtigen (inkl. Unterkategorien).",
             "default": "",
-            "type": "string",
         },
         "throttle_ms": {
             "name": "Throttle pro Artikel (ms)",
-            "description": "kleine Pause zwischen Artikeln",
+            "description": "Wartezeit zwischen Shopify-Requests (429 vermeiden).",
+            "validator": "int",
             "default": 600,
-            "type": "integer",
         },
         "max_parts_per_run": {
             "name": "Max. Artikel pro Lauf",
-            "description": "0 = unlimitiert",
-            "default": 40,
-            "type": "integer",
-        },
-        # Anzeige-Felder (werden von views gepflegt)
-        "last_sync_at": {
-            "name": "Letzter Sync (Zeit)",
-            "description": "Nur Anzeige",
-            "default": "",
-            "type": "string",
-        },
-        "last_sync_result": {
-            "name": "Letzter Sync (Kurzinfo)",
-            "description": "Nur Anzeige",
-            "default": "",
-            "type": "string",
+            "description": "Begrenzt die Anzahl je Sync-Run.",
+            "validator": "int",
+            "default": 60,
         },
     }
+
+    def setup_urls(self):
+        from . import urls
+        return urls.urlpatterns
+
+    # Link im Plugin-Dialog auf unsere hübsche Einstellungsseite
+    def get_plugin_url(self):
+        try:
+            return reverse("shopify_sync_settings")
+        except Exception:
+            return None

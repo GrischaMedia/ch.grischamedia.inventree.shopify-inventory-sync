@@ -1,0 +1,152 @@
+{% load static %}
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Shopify Sync – Einstellungen</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    :root{
+      --bg:#0b1020; --panel:#101833; --muted:#8ea3c3; --text:#e8eefb; --accent:#4da3ff; --accent-2:#7bd389;
+      --danger:#ff5c6b; --border:#1d2747;
+    }
+    *{box-sizing:border-box}
+    body{margin:0; font:14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu; background:var(--bg); color:var(--text);}
+    a{color:var(--accent); text-decoration:none}
+    .wrap{max-width:1200px; margin:24px auto; padding:0 16px;}
+    h1{margin:0 0 16px 0; font-size:28px;}
+    .grid{display:grid; grid-template-columns: 480px 1fr; gap:20px;}
+    @media (max-width: 980px){ .grid{grid-template-columns:1fr} }
+    .card{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px;}
+    .row{display:flex; gap:8px; flex-wrap:wrap; align-items:center}
+    .btn{
+      border:1px solid var(--border); background:#162149; color:var(--text);
+      padding:10px 14px; border-radius:10px; font-weight:600; cursor:pointer;
+    }
+    .btn:hover{background:#1a2760}
+    .btn.alt{background:#162b24}
+    .btn.alt:hover{background:#1b3a30}
+    .btn.ghost{background:transparent}
+    .tag{display:inline-block; padding:3px 8px; border-radius:999px; border:1px solid var(--border); color:var(--muted)}
+    .flash{background:#102a17; border:1px solid #184a2a; color:#b8ffd0; padding:10px 12px; border-radius:10px; margin:10px 0}
+    .muted{color:var(--muted)}
+    .k{color:#9bc0ff}
+    .v{color:#7bd389}
+    .err{color:var(--danger)}
+    .form dl{display:grid; grid-template-columns: 240px 1fr; gap:10px 12px}
+    @media (max-width: 720px){ .form dl{grid-template-columns:1fr} }
+    .form dt{color:var(--muted); align-self:center}
+    .form dd{margin:0}
+    .in{width:100%; padding:10px 12px; border-radius:10px; border:1px solid var(--border); background:#0f1733; color:var(--text)}
+    .small{font-size:12px}
+    pre{white-space:pre-wrap; word-break:break-word; background:#0d142b; border:1px solid var(--border); border-radius:10px; padding:12px; max-height:60vh; overflow:auto}
+    .two-col{display:grid; grid-template-columns: 1fr; gap:16px}
+    .sticky{position:sticky; top:16px}
+    .sum-line{display:flex; gap:18px; flex-wrap:wrap}
+    .sum-line div{background:#0d1530; border:1px solid var(--border); padding:8px 10px; border-radius:10px}
+    .toolbar{display:flex; gap:8px; flex-wrap:wrap}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Shopify Sync – Einstellungen</h1>
+
+    {% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
+
+    <div class="grid">
+      <!-- LEFT: Settings & Actions -->
+      <div class="card">
+        <div class="toolbar" style="margin-bottom:10px">
+          <a class="btn" href="?run=1">Sync jetzt starten</a>
+          <a class="btn ghost" href="{% url 'shopify_sync_json' %}" target="_blank">als JSON öffnen</a>
+          <a class="btn ghost" href="{% url 'shopify_sync_missing' %}" target="_blank">fehlende SKUs</a>
+          <span class="tag">Version {{ version }}</span>
+        </div>
+
+        <form method="post" class="form">
+          {% csrf_token %}
+          <dl>
+            {% for s in plugin.settings_definition %}
+              <dt>{{ s.name }}</dt>
+              <dd>
+                <input class="in" name="{{ s.key }}" value="{{ s.value|default_if_none:'' }}">
+                {% if s.description %}<div class="small muted">{{ s.description }}</div>{% endif %}
+              </dd>
+            {% endfor %}
+          </dl>
+          <div style="margin-top:12px" class="row">
+            <button class="btn alt" type="submit">Speichern</button>
+            <span class="muted small">Plugin: {{ slug }}</span>
+          </div>
+        </form>
+      </div>
+
+      <!-- RIGHT: Live Result -->
+      <div class="card sticky">
+        <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:8px">
+          <div class="muted small">Letzter Sync</div>
+          <div class="tag">{{ last_sync_at|default:"–" }}</div>
+        </div>
+
+        <div style="margin:6px 0 12px 0">
+          {% if last_sync_summary %}
+            <div class="sum-line">
+              {% for token in last_sync_summary.split " " %}
+                <div>{{ token }}</div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <span class="muted">Noch kein Lauf gespeichert.</span>
+          {% endif %}
+        </div>
+
+        <div class="muted small" style="margin-bottom:6px">Live-Ergebnis</div>
+        <pre id="live-pre">
+{% if last_sync_json %}
+{{ last_sync_json|safe|json_script:"syncjson" }}
+<script>
+  try{
+    const data = JSON.parse(document.getElementById("syncjson").textContent);
+    document.currentScript.previousElementSibling.textContent = JSON.stringify(data, null, 2);
+  }catch(e){ document.currentScript.previousElementSibling.textContent = "Kein JSON vorhanden."; }
+</script>
+{% else %}
+Noch kein Ergebnis vorhanden.
+{% endif %}
+        </pre>
+
+        <div class="row" style="margin-top:8px">
+          <button id="runBtn" class="btn">Sync jetzt starten</button>
+          <a class="btn ghost" href="{% url 'shopify_sync_json' %}" target="_blank">als JSON öffnen</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Mini-Fetch für „Sync jetzt starten“ ohne Seiten-Reload (rechte Box)
+    const btn = document.getElementById('runBtn');
+    const pre = document.getElementById('live-pre');
+
+    if (btn) {
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        btn.disabled = true;
+        const label = btn.textContent;
+        btn.textContent = 'Sync läuft …';
+
+        try {
+          const r = await fetch("{% url 'shopify_sync_now' %}");
+          const j = await r.json();
+          pre.textContent = JSON.stringify(j, null, 2);
+        } catch (err) {
+          pre.textContent = 'Fehler: ' + err;
+        } finally {
+          btn.textContent = label;
+          btn.disabled = false;
+        }
+      });
+    }
+  </script>
+</body>
+</html>
