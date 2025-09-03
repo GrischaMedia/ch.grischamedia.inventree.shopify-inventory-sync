@@ -1,7 +1,6 @@
 # inventree_shopify_inventory_sync/shopify_client.py
 import time
 import unicodedata
-import urllib.parse
 import requests
 
 API_VERSION = "2024-10"
@@ -12,7 +11,6 @@ _API_MAX_BACKOFF = 5.0
 
 
 def _norm(s: str) -> str:
-    """Robuste Normalisierung für SKU-Vergleiche: trim, NFKC, casefold."""
     if s is None:
         return ""
     return unicodedata.normalize("NFKC", str(s)).strip().casefold()
@@ -32,7 +30,7 @@ class ShopifyClient:
 
         self._locations_cache = None
 
-    # --------- Rate-limit aware request ----------
+    # ---------- rate-limit-aware request ----------
     def _request(self, method: str, url: str, *, params=None, json=None, timeout=20, max_retries=5) -> requests.Response:
         backoff = 1.0
         last_exc = None
@@ -87,10 +85,6 @@ class ShopifyClient:
         return r.json() or {}
 
     def _rest_get_paginated(self, path: str, params=None, limit=50, max_pages=20):
-        """
-        Iteriere durch alle Seiten eines REST-Endpoints (neues Cursor-Paging via Link: rel="next").
-        Gibt Tupel (items_iter, last_response) zurück – hier nutzen wir es, um unterwegs abzubrechen.
-        """
         url = f"https://{self.domain}{path}"
         p = dict(params or {})
         p["limit"] = limit
@@ -105,14 +99,12 @@ class ShopifyClient:
                 r = self._request("GET", url, params=p)
 
             j = r.json() or {}
-            yield j, r  # Konsument kann hier abbrechen, sobald er gefunden hat
+            yield j, r
 
-            # Link-Header prüfen
             link = r.headers.get("Link") or r.headers.get("link")
             if not link:
                 break
 
-            # Beispiel: <https://.../variants.json?page_info=XYZ&limit=50>; rel="next"
             next_url = None
             for part in link.split(","):
                 seg = part.strip()
@@ -130,16 +122,11 @@ class ShopifyClient:
         r = self._request("POST", url, json={"query": query, "variables": variables or {}}, timeout=25)
         return r.json() or {}
 
-    # --------- Public: Variant by SKU ----------
+    # ---------- Variant by SKU ----------
     def find_variant_by_sku(self, sku: str) -> dict | None:
-        """
-        Findet eine Variante anhand der SKU.
-        - REST: /variants.json (mit Pagination; sku-Param wird nicht überall gefiltert)
-        - Fallback: GraphQL productVariants(query:"sku:<SKU>")
-        """
         target = _norm(sku)
 
-        # REST paginiert: wir durchsuchen ALLE Varianten, brechen aber ab sobald gefunden
+        # REST: alle Seiten iterieren, abbrechen sobald gefunden
         try:
             for page_json, _resp in self._rest_get_paginated(f"/admin/api/{API_VERSION}/variants.json", params={"sku": sku}):
                 variants = page_json.get("variants", []) or []
@@ -153,10 +140,9 @@ class ShopifyClient:
                             "title": v.get("title"),
                         }
         except Exception:
-            # REST kann weiter fehlschlagen – wir probieren GraphQL-Fallback
             pass
 
-        # GraphQL Fallback (IMMER, wenn REST nichts fand)
+        # GraphQL-Fallback
         q = """
         query($q:String!){
           productVariants(first:50, query:$q){
@@ -189,7 +175,7 @@ class ShopifyClient:
 
         return None
 
-    # --------- Locations / Inventory ----------
+    # ---------- Locations / Inventory ----------
     def _get_all_locations(self) -> list[dict]:
         if self._locations_cache is not None:
             return self._locations_cache
@@ -204,7 +190,6 @@ class ShopifyClient:
             return None
 
         if only_location_name:
-            # Name robust vergleichen
             only_norm = _norm(only_location_name)
             locs = [l for l in locs if _norm(l.get("name")) == only_norm]
             if not locs:
