@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ch.grischamedia.inventree.shopify-inventory-sync"
+version = "0.0.1"
+description = "Shopify → InvenTree Inventory Sync (SKU == IPN) via Stock Adjustments"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "GrischaMedia / Grischabock (Sandro Geyer)" }]
+dependencies = [
+  "requests>=2.31"
+]
+
+[project.entry-points."inventree_plugins"]
+shopify_inventory_sync = "ch.grischamedia.inventree.shopify_inventory_sync.plugin:ShopifyInventorySyncPlugin"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ch.*"]
