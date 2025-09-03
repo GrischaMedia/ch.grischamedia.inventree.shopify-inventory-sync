@@ -1,4 +1,4 @@
-from django.http import JsonResponse, HttpResponse, HttpResponseForbidden
+from django.http import JsonResponse, HttpResponseForbidden
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.utils.timezone import now
 from django.views.decorators.csrf import csrf_exempt
@@ -25,27 +25,39 @@ def _allowed(u):
         return False
 
 
-def _coerce(value, validator):
-    if validator == "bool":
-        if isinstance(value, bool):
-            return value
-        v = str(value or "").strip().lower()
-        return v in ("1", "true", "yes", "on", "y")
-    if validator == "int":
-        try:
-            return int(str(value).strip() or "0")
-        except Exception:
-            return 0
-    return "" if value is None else str(value)
+# ---------- Diagnose-Endpunkte (ohne Login) ----------
 
+def ping(request):
+    """
+    Minimal-Check: Ist das Plugin gemountet und erreichbar?
+    """
+    p = _plugin()
+    return JsonResponse({
+        "ok": True,
+        "plugin_loaded": bool(p),
+        "slug": SLUG,
+    })
+
+
+def urls_dump(request):
+    """
+    Zeigt die *vom Plugin registrierten* URLs an – damit sehen wir,
+    ob Django sie überhaupt kennt (und unter welchem Pfad).
+    """
+    from django.urls import get_resolver
+    paths = []
+    for pat in get_resolver().url_patterns:
+        s = str(pat.pattern)
+        if s.startswith("plugin/") and SLUG in s:
+            paths.append(s)
+    return JsonResponse({"ok": True, "paths": paths})
+
+
+# ---------- Produktive Endpunkte ----------
 
 @login_required
 @user_passes_test(_allowed)
 def sync_now_open(request):
-    """
-    Startet einen Sync und gibt JSON zurück.
-    (Bewährter, funktionierender Endpoint)
-    """
     p = _plugin()
     if p is None:
         return HttpResponseForbidden("Plugin nicht geladen")
@@ -58,9 +70,6 @@ def sync_now_open(request):
 @login_required
 @user_passes_test(_allowed)
 def report_missing(request):
-    """
-    Listet IPNs, die in Shopify per SKU nicht gefunden wurden (JSON).
-    """
     p = _plugin()
     if p is None:
         return HttpResponseForbidden("Plugin nicht geladen")
@@ -70,9 +79,6 @@ def report_missing(request):
 @login_required
 @user_passes_test(_allowed)
 def debug_sku(request):
-    """
-    Prüft eine einzelne SKU gegen Shopify und gibt Verfügbarkeiten zurück (JSON).
-    """
     p = _plugin()
     if p is None:
         return HttpResponseForbidden("Plugin nicht geladen")
@@ -99,10 +105,6 @@ def debug_sku(request):
 @login_required
 @user_passes_test(_allowed)
 def save_settings(request):
-    """
-    Speichert Plugin-Settings (JSON POST).
-    Keine UI-Route, keine Template-Ansicht – nur JSON.
-    """
     p = _plugin()
     if p is None:
         return HttpResponseForbidden("Plugin nicht geladen")
@@ -113,21 +115,29 @@ def save_settings(request):
         payload = json.loads(request.body.decode("utf-8") or "{}")
     except Exception:
         payload = {}
-    defs = p.SETTINGS
-    for key, meta in defs.items():
+    for key, meta in p.SETTINGS.items():
         raw = payload.get(key, "")
-        vdef = meta.get("validator")
-        coerced = _coerce(raw, vdef)
-        p.set_setting(key, coerced, user=request.user)
+        val = _coerce(raw, meta.get("validator"))
+        p.set_setting(key, val, user=request.user)
     return JsonResponse({"ok": True})
+
+
+def _coerce(value, validator):
+    if validator == "bool":
+        if isinstance(value, bool):
+            return value
+        v = str(value or "").strip().lower()
+        return v in ("1", "true", "yes", "on", "y")
+    if validator == "int":
+        try:
+            return int(str(value).strip() or "0")
+        except Exception:
+            return 0
+    return "" if value is None else str(value)
 
 
 @login_required
 def sync_json(request):
-    """
-    Gibt das JSON des letzten Laufs zurück.
-    (Kein UI; wenn _last_sync_result leer ist -> Fehlermeldung)
-    """
     if _last_sync_result is None:
         return JsonResponse({"ok": False, "error": "no_last_run"})
     return JsonResponse(_last_sync_result)
