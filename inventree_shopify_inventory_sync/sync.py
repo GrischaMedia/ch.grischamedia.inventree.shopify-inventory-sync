@@ -1,15 +1,12 @@
 from typing import Dict, Any, Iterable
 from django.db import transaction
 import os
-
 from .shopify_client import ShopifyClient
-
 
 def _get_models():
     from part.models import Part
     from stock.models import StockItem, StockLocation
     return Part, StockItem, StockLocation
-
 
 def _iter_parts(plugin) -> Iterable:
     Part, _, _ = _get_models()
@@ -21,7 +18,6 @@ def _iter_parts(plugin) -> Iterable:
             qs = qs.filter(category_id__in=cat_ids)
     return qs.iterator()
 
-
 def _ensure_target_location(loc_id: str):
     _, _, StockLocation = _get_models()
     try:
@@ -31,14 +27,12 @@ def _ensure_target_location(loc_id: str):
     except Exception:
         return None
 
-
 def _get_or_create_mirror_item(part, location):
     _, StockItem, _ = _get_models()
     item = StockItem.objects.filter(part=part, location=location, serial=None).first()
     if item:
         return item
     return StockItem.objects.create(part=part, location=location, quantity=0)
-
 
 def _stocktake_with_note(item, user, new_qty: int, note: str) -> Dict[str, Any]:
     try:
@@ -63,7 +57,6 @@ def _stocktake_with_note(item, user, new_qty: int, note: str) -> Dict[str, Any]:
             item.quantity = new_qty
             item.save()
             return {"changed": True, "method": "hard_set"}
-
 
 def run_full_sync(plugin, user) -> Dict[str, Any]:
     shop_domain = plugin.get_setting("shop_domain") or os.getenv("SHOPIFY_SHOP_DOMAIN", "")
@@ -106,41 +99,19 @@ def run_full_sync(plugin, user) -> Dict[str, Any]:
         target_qty = int(avail)
         delta = target_qty - current_qty
 
-        if delta_guard and abs(delta) > delta_guard:     
+        if delta_guard and abs(delta) > delta_guard:
             skipped += 1
-            details.append({
-                "part": part.pk, "ipn": sku,
-                "current": current_qty, "target": target_qty,
-                "status": "skipped_delta_guard", "delta": delta
-            })
+            details.append({"part": part.pk, "ipn": sku, "current": current_qty, "target": target_qty, "status": "skipped_delta_guard", "delta": delta})
             continue
 
         if dry_run or delta == 0:
-            details.append({
-                "part": part.pk, "ipn": sku,
-                "current": current_qty, "target": target_qty,
-                "status": "dry_run" if dry_run else "no_change",
-                "delta": delta
-            })
+            details.append({"part": part.pk, "ipn": sku, "current": current_qty, "target": target_qty, "status": "dry_run" if dry_run else "no_change", "delta": delta})
             continue
- s
+
         with transaction.atomic():
             res = _stocktake_with_note(mirror, user, target_qty, note_text)
             if res.get("changed"):
                 changed += 1
-            details.append({
-                "part": part.pk, "ipn": sku,
-                "current": current_qty, "target": target_qty,
-                "delta": delta,
-                "result": res
-            })
+            details.append({"part": part.pk, "ipn": sku, "current": current_qty, "target": target_qty, "delta": delta, "result": res})
 
-    return {
-        "ok": True,
-        "dry_run": dry_run,
-        "total_parts": total,
-        "sku_matched": matched,
-        "changed": changed,
-        "skipped_delta_guard": skipped,
-        "details_preview": details[:50],
-    }
+    return {"ok": True, "dry_run": dry_run, "total_parts": total, "sku_matched": matched, "changed": changed, "skipped_delta_guard": skipped, "details_preview": details[:50]}
