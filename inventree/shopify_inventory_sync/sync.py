@@ -6,15 +6,12 @@ import os
 from .shopify_client import ShopifyClient
 
 
-# -------- Lazy-Model-Imports --------
 def _get_models():
-    # Lazy import to avoid early import failures during plugin discovery
     from part.models import Part
     from stock.models import StockItem, StockLocation
     return Part, StockItem, StockLocation
 
 
-# -------- Helper --------
 def _iter_parts(plugin) -> Iterable:
     Part, _, _ = _get_models()
     qs = Part.objects.filter(active=True)
@@ -45,9 +42,6 @@ def _get_or_create_mirror_item(part, location):
 
 
 def _stocktake_with_note(item, user, new_qty: int, note: str) -> Dict[str, Any]:
-    """
-    Bevorzugt stocktake(); fallback add/remove; letzter Notanker hard set.
-    """
     try:
         res = item.stocktake(user, new_qty, notes=note)  # type: ignore[attr-defined]
         return {"changed": True, "method": "stocktake", "result": str(res)}
@@ -72,16 +66,7 @@ def _stocktake_with_note(item, user, new_qty: int, note: str) -> Dict[str, Any]:
             return {"changed": True, "method": "hard_set"}
 
 
-# -------- Main --------
 def run_full_sync(plugin, user) -> Dict[str, Any]:
-    """
-    Shopify SKU == InvenTree IPN
-    - summiert verfügbare Bestände über alle Shopify-Locations
-    - führt pro Part ein Mirror-Item am Ziel-Lagerort
-    - bucht Differenzen mit Notiz (Stocktake/Add/Remove)
-    """
-
-    # Settings + ENV-Fallbacks
     shop_domain = plugin.get_setting("shop_domain") or os.getenv("SHOPIFY_SHOP_DOMAIN", "")
     token = plugin.get_setting("admin_api_token") or os.getenv("SHOPIFY_ADMIN_API_TOKEN", "")
     use_graphql = bool(plugin.get_setting("use_graphql"))
@@ -101,7 +86,7 @@ def run_full_sync(plugin, user) -> Dict[str, Any]:
 
     for part in _iter_parts(plugin):
         total += 1
-        sku = (part.IPN or "").strip() or None  # IPN in InvenTree == SKU in Shopify
+        sku = (part.IPN or "").strip() or None
         if not sku:
             details.append({"part": part.pk, "status": "no_ipn"})
             continue
