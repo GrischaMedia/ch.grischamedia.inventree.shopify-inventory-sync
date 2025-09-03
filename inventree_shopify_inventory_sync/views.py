@@ -1,18 +1,28 @@
-# inventree_shopify_inventory_sync/views.py
 from django.http import JsonResponse, HttpResponseForbidden
 from django.contrib.auth.decorators import login_required, user_passes_test
-
-from plugin.registry import registry  # <— offizielle Registry
+from plugin.registry import registry
 from .sync import run_full_sync
 
 SLUG = "shopify-inventory-sync"
 
 def _allowed(u):
-    return bool(u.is_superuser or u.has_perm("stock.change_stockitem"))
+    try:
+        return bool(u.is_superuser or u.has_perm("stock.change_stockitem"))
+    except Exception:
+        return False
 
 def _plugin():
-    # Sichere Auflösung der Plugin-Instanz – unabhängig davon, wie die View aufgerufen wird
+    # Sicher die Plugin-Instanz aus der Registry holen
     return registry.get_plugin(SLUG)
+
+# --- Public health endpoint: hilft sofort zu sehen, ob URLs gemountet sind ---
+def ping(request):
+    p = _plugin()
+    return JsonResponse({
+        "ok": True,
+        "plugin_loaded": bool(p),
+        "user_authenticated": bool(getattr(request, "user", None) and request.user.is_authenticated),
+    })
 
 @login_required
 def index(request):
@@ -21,13 +31,13 @@ def index(request):
         return HttpResponseForbidden("plugin not loaded")
     data = {
         "plugin": SLUG,
+        "version": getattr(p, "VERSION", "n/a"),
         "endpoints": {
             "open":  request.build_absolute_uri(request.path.rstrip("/") + "/sync-now-open/"),
             "guarded": request.build_absolute_uri(request.path.rstrip("/") + "/sync-now/"),
+            "ping": request.build_absolute_uri(request.path.rstrip("/") + "/ping/"),
         },
         "perms_ok": _allowed(request.user),
-        "version": getattr(p, "VERSION", "n/a"),
-        "title": getattr(p, "TITLE", ""),
     }
     return JsonResponse(data)
 
