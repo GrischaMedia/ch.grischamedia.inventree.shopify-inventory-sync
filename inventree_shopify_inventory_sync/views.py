@@ -42,8 +42,7 @@ def _coerce(value, validator):
 @login_required
 def settings_view_inline(request):
     """
-    Liefert die komplette Konfigurationsseite als Inline-HTML.
-    Kein Template-Loader, keine settings/-Route, keine Redirects.
+    Komplette Konfigurationsseite als Inline-HTML unter /plugin/<slug>/panel/
     GET ?run=1 führt einen Sync aus und zeigt rechts das Live-JSON.
     """
     p = _plugin()
@@ -60,7 +59,7 @@ def settings_view_inline(request):
         _last_sync_at = now()
         flash = "Sync ausgeführt."
 
-    # Settings einsammeln für Anzeige
+    # Settings einsammeln
     defs_ui = []
     current = p.get_settings()
     for key, meta in p.SETTINGS.items():
@@ -72,7 +71,6 @@ def settings_view_inline(request):
             "validator": meta.get("validator", ""),
         })
 
-    # Zusammenfassung bauen
     def _summarize(res):
         if not res:
             return ""
@@ -85,7 +83,7 @@ def settings_view_inline(request):
     summary = _summarize(_last_sync_result)
     last_sync_at_str = _last_sync_at.strftime("%Y-%m-%d %H:%M:%S") if _last_sync_at else "–"
 
-    # Inline-HTML (dein Dark-Theme + rechte Live-Box + Buttons)
+    # Inline-HTML
     html_top = f"""<!doctype html>
 <html lang="de"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -109,33 +107,44 @@ h1{{margin:0 0 16px 0;font-size:28px}} .grid{{display:grid;grid-template-columns
 </style></head><body>
 <div class="wrap">
   <h1>Shopify Sync – Einstellungen</h1>
-  {"<div class='flash'>" + flash + "</div>" if flash else ""}
+  {"<div class='flash'>" + "Sync ausgeführt." + "</div>" if (flash) else ""}
   <div class="grid">
     <div class="card">
       <div class="toolbar" style="margin-bottom:10px">
         <a class="btn" href="?run=1">Sync jetzt starten</a>
         <a class="btn ghost" href="/plugin/{SLUG}/sync-json/" target="_blank">als JSON öffnen</a>
         <a class="btn ghost" href="/plugin/{SLUG}/report-missing/" target="_blank">fehlende SKUs</a>
-        <span class="tag">Version 0.0.31</span>
+        <span class="tag">Version 0.0.32</span>
       </div>
       <form id="cfg" class="form">
         <dl>"""
 
-    # Settings-Felder einfügen
+    # Felder
+    import html as _html
     fields_html = []
     for s in defs_ui:
+        val = _html.escape(str(s["value"]) if s["value"] is not None else "")
+        desc = f"<div class='small muted'>{_html.escape(s['description'])}</div>" if s["description"] else ""
         fields_html.append(
-            f"<dt>{s['name']}</dt>"
-            f"<dd>"
-            f"<input class='in' name='{s['key']}' value=\"{str(s['value']).replace('\"','&quot;')}\">"
-            f"{('<div class=\"small muted\">' + s['description'] + '</div>') if s['description'] else ''}"
-            f"</dd>"
+            f"<dt>{_html.escape(s['name'])}</dt>"
+            f"<dd><input class='in' name='{_html.escape(s['key'])}' value=\"{val}\">{desc}</dd>"
         )
 
-    html_mid = """</dl>
+    # Rechte Spalte
+    def _json_pretty(data):
+        import json
+        return json.dumps(data, ensure_ascii=False, indent=2)
+
+    json_pretty = _json_pretty(_last_sync_result or {"info": "Noch kein Ergebnis vorhanden."})
+    sum_html = (
+        "<div class='sum-line'>" + "".join([f"<div>{_html.escape(t)}</div>" for t in (summary.split(" ") if summary else [])]) + "</div>"
+        if summary else "<span class='muted'>Noch kein Lauf gespeichert.</span>"
+    )
+
+    html_bottom = f"""</dl>
         <div style="margin-top:12px" class="row">
           <button class="btn alt" type="submit">Speichern</button>
-          <span class="muted small">Plugin: """ + SLUG + """</span>
+          <span class="muted small">Plugin: {SLUG}</span>
         </div>
       </form>
     </div>
@@ -143,22 +152,13 @@ h1{{margin:0 0 16px 0;font-size:28px}} .grid{{display:grid;grid-template-columns
     <div class="card sticky">
       <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
         <div class="muted small">Letzter Sync</div>
-        <div class="tag">""" + last_sync_at_str + """</div>
+        <div class="tag">{last_sync_at_str}</div>
       </div>
-      <div style="margin:6px 0 12px 0">"""
+      <div style="margin:6px 0 12px 0">{sum_html}</div>
 
-    if summary:
-        sum_tokens = "".join([f"<div>{t}</div>" for t in summary.split(" ")])
-        html_mid += f"<div class='sum-line'>{sum_tokens}</div>"
-    else:
-        html_mid += "<span class='muted'>Noch kein Lauf gespeichert.</span>"
-
-    import json as _json
-    json_pretty = _json.dumps(_last_sync_result or {"info": "Noch kein Ergebnis vorhanden."}, ensure_ascii=False, indent=2)
-
-    html_bottom = f"""</div>
       <div class="muted small" style="margin-bottom:6px">Live-Ergebnis</div>
-      <pre id="live-pre">{json_pretty}</pre>
+      <pre id="live-pre">{_html.escape(json_pretty)}</pre>
+
       <div class="row" style="margin-top:8px">
         <button id="runBtn" class="btn">Sync jetzt starten</button>
         <a class="btn ghost" href="/plugin/{SLUG}/sync-json/" target="_blank">als JSON öffnen</a>
@@ -208,7 +208,7 @@ if (form) {{
 </script>
 </body></html>"""
 
-    return HttpResponse(html_top + "".join(fields_html) + html_mid + html_bottom)
+    return HttpResponse(html_top + "".join(fields_html) + html_bottom)
 
 
 @csrf_exempt

@@ -3,11 +3,14 @@ from plugin.mixins import SettingsMixin
 
 
 class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
+    """
+    Shopify → InvenTree Bestandsabgleich (SKU == IPN)
+    """
     NAME = "ShopifyInventorySync"
     SLUG = "shopify-inventory-sync"
     TITLE = "Shopify Inventory Sync"
-    DESCRIPTION = "Shopify → InvenTree Bestandsabgleich (SKU == IPN)."
-    VERSION = "0.0.31"
+    DESCRIPTION = "Liest Bestände aus Shopify (per SKU) und bucht Bestandskorrekturen in InvenTree (IPN-Match)."
+    VERSION = "0.0.32"
     AUTHOR = "GrischaMedia / Grischabock (Sandro Geyer)"
     WEBSITE = ""
 
@@ -82,13 +85,15 @@ class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
         },
     }
 
+    # URLs des Plugins registrieren
     def setup_urls(self):
         from . import urls
         return urls.urlpatterns
 
+    # Kompatibler Fallback
     def get_urls(self):
         return self.setup_urls()
 
+    # WICHTIG: Der "Open"-Link im Plugin-Dialog zeigt direkt auf /panel/
     def get_plugin_url(self):
-        # Zeige im Plugin-Dialog direkt auf den Root-Pfad des Plugins
-        return f"/plugin/{self.SLUG}/"
+        return f"/plugin/{self.SLUG}/panel/"
