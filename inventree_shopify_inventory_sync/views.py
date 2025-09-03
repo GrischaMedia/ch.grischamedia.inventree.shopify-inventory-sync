@@ -5,10 +5,10 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.html import escape
 from django.shortcuts import redirect
-import requests
 
 from plugin.registry import registry
 from .sync import run_full_sync
+from .shopify_client import ShopifyClient
 
 SLUG = "shopify-inventory-sync"
 
@@ -44,12 +44,12 @@ def index(request):
         "plugin": SLUG,
         "version": getattr(p, "VERSION", "n/a"),
         "endpoints": {
-            "open": request.build_absolute_uri(f"{base}/sync-now-open/"),
-            "guarded": request.build_absolute_uri(f"{base}/sync-now/"),
-            "ping": request.build_absolute_uri(f"{base}/ping/"),
-            "config": request.build_absolute_uri(f"{base}/config/"),
-            "debug_sku": request.build_absolute_uri(f"{base}/debug-sku/?sku=MB-TEST"),
-            "report_missing": request.build_absolute_uri(f"{base}/report-missing/"),
+            "open": f"{base}/sync-now-open/",
+            "guarded": f"{base}/sync-now/",
+            "ping": f"{base}/ping/",
+            "config": f"{base}/config/",
+            "debug_sku": f"{base}/debug-sku/?sku=MB-TEST",
+            "report_missing": f"{base}/report-missing/",
         },
         "perms_ok": _allowed(request.user),
     }
@@ -96,6 +96,8 @@ def settings_form(request):
         "dry_run",
         "note_text",
         "filter_category_ids",
+        "throttle_ms",
+        "max_parts_per_run",
     ]
 
     if request.method == "POST":
@@ -103,7 +105,7 @@ def settings_form(request):
             val = request.POST.get(k, "")
             if k in {"use_graphql", "dry_run"}:
                 val = str(val).lower() in {"1", "true", "on", "yes"}
-            elif k in {"auto_schedule_minutes", "delta_guard"}:
+            elif k in {"auto_schedule_minutes", "delta_guard", "throttle_ms", "max_parts_per_run"}:
                 try:
                     val = int(val)
                 except Exception:
@@ -134,7 +136,7 @@ def settings_form(request):
 
     html.append(row("Shopify Shop Domain", "shop_domain", values.get("shop_domain", "")))
     html.append(row("Admin API Token", "admin_api_token", values.get("admin_api_token", ""), "password"))
-    html.append(row("GraphQL verwenden (true/false)", "use_graphql", values.get("use_graphql", False)))
+    html.append(row("GraphQL verwenden (true/false)", "use_graphql", values.get("use_graphql", True)))
     html.append(row("InvenTree Ziel-Lagerort (ID)", "inv_target_location", values.get("inv_target_location", "")))
     html.append(row("Nur Standort (Name)", "restrict_location_name", values.get("restrict_location_name", "")))
     html.append(row("Auto-Sync Intervall Minuten", "auto_schedule_minutes", values.get("auto_schedule_minutes", 30)))
@@ -142,6 +144,8 @@ def settings_form(request):
     html.append(row("Dry-Run (true/false)", "dry_run", values.get("dry_run", True)))
     html.append(row("Buchungsnotiz", "note_text", values.get("note_text", "Korrektur durch Onlineshop")))
     html.append(row("Nur Kategorien (IDs, komma-getrennt)", "filter_category_ids", values.get("filter_category_ids", "")))
+    html.append(row("Throttle pro Artikel (ms)", "throttle_ms", values.get("throttle_ms", 150)))
+    html.append(row("Max. Artikel pro Lauf", "max_parts_per_run", values.get("max_parts_per_run", 60)))
 
     html += [
         "</table>",
@@ -155,6 +159,7 @@ def settings_form(request):
 
 @login_required
 def debug_sku(request):
+    """Jetzt mit dem gleichen Client wie der Sync: Pagination + GraphQL-Fallback + Standortfilter."""
     if not request.user.is_superuser:
         return HttpResponseForbidden("superuser required")
 
@@ -166,80 +171,25 @@ def debug_sku(request):
     if not sku:
         return JsonResponse({"ok": False, "error": "param ?sku=... fehlt"})
 
-    domain = (p.get_setting("shop_domain") or "").strip().lower()
-    domain = domain.replace("https://", "").replace("http://", "").strip("/")
-    token = p.get_setting("admin_api_token")
-    api_ver = "2024-10"
+    client = ShopifyClient(
+        (p.get_setting("shop_domain") or ""),
+        (p.get_setting("admin_api_token") or ""),
+        use_graphql=True,  # Debug immer mit Fallback
+    )
 
-    sess = requests.Session()
-    sess.headers.update({
-        "X-Shopify-Access-Token": token,
-        "Content-Type": "application/json",
-    })
-
-    base = f"https://{domain}/admin/api/{api_ver}"
-
-    vres = sess.get(f"{base}/variants.json", params={"sku": sku}, timeout=20)
-    try:
-        vres.raise_for_status()
-    except Exception as e:
-        return JsonResponse({"ok": False, "sku": sku, "error": f"variants_http_error: {e}", "status": vres.status_code})
-
-    variants = (vres.json() or {}).get("variants", []) or []
-    variant = None
-    for v in variants:
-        if (v.get("sku") or "").strip() == sku:
-            variant = {
-                "id": v.get("id"),
-                "sku": v.get("sku"),
-                "inventory_item_id": v.get("inventory_item_id"),
-                "product_id": v.get("product_id"),
-                "title": v.get("title"),
-            }
-            break
-
+    variant = client.find_variant_by_sku(sku)
     if not variant:
-        return JsonResponse({"ok": False, "sku": sku, "error": "variant_not_found_rest", "raw_count": len(variants)})
+        return JsonResponse({"ok": False, "sku": sku, "error": "variant_not_found"})
 
-    inv_item_id = variant["inventory_item_id"]
+    only_name = (p.get_setting("restrict_location_name") or "").strip() or None
+    total = client.inventory_available_sum(variant.get("inventory_item_id"), only_location_name=only_name)
 
-    locres = sess.get(f"{base}/locations.json", timeout=20)
-    try:
-        locres.raise_for_status()
-    except Exception as e:
-        return JsonResponse({"ok": False, "sku": sku, "variant": variant, "error": f"locations_http_error: {e}", "status": locres.status_code})
-
-    locations = (locres.json() or {}).get("locations", []) or []
-
-    only_name = (p.get_setting("restrict_location_name") or "").strip()
-    if only_name:
-        locations = [l for l in locations if (l.get("name") or "").strip() == only_name]
-
-    levels = []
-    total = 0
-    loc_ids = ",".join(str(l.get("id")) for l in locations if l.get("id"))
-    if loc_ids:
-        lres = sess.get(
-            f"{base}/inventory_levels.json",
-            params={"inventory_item_ids": inv_item_id, "location_ids": loc_ids},
-            timeout=20,
-        )
-        if lres.status_code == 200:
-            j = lres.json() or {}
-            for lvl in (j.get("inventory_levels") or []):
-                avail = lvl.get("available")
-                # name lookup
-                lname = next((x.get("name") for x in locations if x.get("id") == lvl.get("location_id")), None)
-                levels.append({"location_id": lvl.get("location_id"), "location_name": lname, "available": avail})
-                if avail is not None:
-                    total += int(avail)
-
+    # Fürs Debug zusätzlich die Level je Standort holen (wie vorher), aber hier reicht Summe
     return JsonResponse({
         "ok": True,
         "sku": sku,
         "variant": variant,
         "sum_available": total,
-        "levels": levels,
     })
 
 
@@ -252,11 +202,10 @@ def missing_report(request):
     if p is None:
         return HttpResponseForbidden("plugin not loaded")
 
-    from .shopify_client import ShopifyClient
     client = ShopifyClient(
         (p.get_setting("shop_domain") or ""),
         (p.get_setting("admin_api_token") or ""),
-        use_graphql=False,
+        use_graphql=True,
     )
 
     from .sync import _iter_parts

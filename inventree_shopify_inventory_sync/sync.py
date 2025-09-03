@@ -1,4 +1,5 @@
 # inventree_shopify_inventory_sync/sync.py
+import time
 from typing import Iterable
 
 from django.db import transaction
@@ -73,6 +74,9 @@ def run_full_sync(plugin, user):
     note = plugin.get_setting("note_text") or "Korrektur durch Onlineshop"
     only_loc_name = (plugin.get_setting("restrict_location_name") or "").strip() or None
 
+    throttle_ms = int(plugin.get_setting("throttle_ms") or 0)
+    max_parts = int(plugin.get_setting("max_parts_per_run") or 0)
+
     if not domain or not token or not loc_id:
         return {"ok": False, "error": "Einstellungen unvollständig (Domain/Token/Ziel-Lagerort)."}
 
@@ -88,8 +92,12 @@ def run_full_sync(plugin, user):
     skipped_guard = 0
     preview = []
 
+    processed = 0
     for part in _iter_parts(plugin):
         total_parts += 1
+        if max_parts and processed >= max_parts:
+            break
+
         ipn = (part.IPN or "").strip()
         if not ipn:
             continue
@@ -97,49 +105,50 @@ def run_full_sync(plugin, user):
         variant = client.find_variant_by_sku(ipn)
         if not variant:
             preview.append({"part": part.pk, "ipn": ipn, "status": "shopify_variant_not_found"})
-            continue
-
-        matched += 1
-        inv_item_id = variant.get("inventory_item_id") or variant.get("inventoryItemId")
-        target = client.inventory_available_sum(inv_item_id, only_location_name=only_loc_name)
-        if target is None:
-            preview.append({"part": part.pk, "ipn": ipn, "status": "shopify_inventory_error"})
-            continue
-
-        mirror = _get_or_create_mirror_item(part, target_location)
-        current = int(mirror.quantity or 0)
-        delta = int(target) - current
-
-        if delta_guard and abs(delta) > delta_guard:
-            skipped_guard += 1
-            preview.append({
-                "part": part.pk, "ipn": ipn, "current": current, "target": int(target),
-                "delta": delta, "status": "skipped_delta_guard"
-            })
-            continue
-
-        if dry_run or delta == 0:
-            preview.append({
-                "part": part.pk, "ipn": ipn, "current": current, "target": int(target),
-                "delta": delta, "status": "dry_run" if dry_run else "no_change"
-            })
         else:
-            with transaction.atomic():
-                try:
-                    mirror.adjustStock(delta, user=user, notes=note)  # type: ignore[attr-defined]
-                except Exception:
-                    mirror.quantity = int(target)
-                    mirror.save()
-            changed += 1
-            preview.append({
-                "part": part.pk, "ipn": ipn, "current": current, "target": int(target),
-                "delta": delta, "status": "adjusted"
-            })
+            matched += 1
+            inv_item_id = variant.get("inventory_item_id") or variant.get("inventoryItemId")
+            target = client.inventory_available_sum(inv_item_id, only_location_name=only_loc_name)
+            if target is None:
+                preview.append({"part": part.pk, "ipn": ipn, "status": "shopify_inventory_error"})
+            else:
+                mirror = _get_or_create_mirror_item(part, target_location)
+                current = int(mirror.quantity or 0)
+                delta = int(target) - current
+
+                if delta_guard and abs(delta) > delta_guard:
+                    skipped_guard += 1
+                    preview.append({
+                        "part": part.pk, "ipn": ipn, "current": current, "target": int(target),
+                        "delta": delta, "status": "skipped_delta_guard"
+                    })
+                elif dry_run or delta == 0:
+                    preview.append({
+                        "part": part.pk, "ipn": ipn, "current": current, "target": int(target),
+                        "delta": delta, "status": "dry_run" if dry_run else "no_change"
+                    })
+                else:
+                    with transaction.atomic():
+                        try:
+                            mirror.adjustStock(delta, user=user, notes=note)  # type: ignore[attr-defined]
+                        except Exception:
+                            mirror.quantity = int(target)
+                            mirror.save()
+                    changed += 1
+                    preview.append({
+                        "part": part.pk, "ipn": ipn, "current": current, "target": int(target),
+                        "delta": delta, "status": "adjusted"
+                    })
+
+        processed += 1
+        if throttle_ms > 0:
+            time.sleep(throttle_ms / 1000.0)
 
     return {
         "ok": True,
         "dry_run": dry_run,
         "total_parts": total_parts,
+        "processed": processed,
         "sku_matched": matched,
         "changed": changed,
         "skipped_delta_guard": skipped_guard,

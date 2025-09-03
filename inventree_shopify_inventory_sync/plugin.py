@@ -12,7 +12,7 @@ class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
     Shopify → InvenTree Bestandsabgleich (SKU == IPN)
     """
     NAME = "ShopifyInventorySync"
-    SLUG = "shopify-inventory-sync"  # URL-Basis: /plugin/shopify-inventory-sync/
+    SLUG = "shopify-inventory-sync"
     TITLE = "Shopify → InvenTree Inventory Sync (SKU == IPN)"
     DESCRIPTION = "Liest Bestände aus Shopify (per SKU) und bucht Bestandskorrekturen in InvenTree (IPN-Match)."
     VERSION = "0.0.12"
@@ -25,7 +25,7 @@ class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
         path("sync-now-open/", views.sync_now_open, name="sync-now-open"),
         path("config/", views.settings_form, name="config"),
         path("debug-sku/", views.debug_sku, name="debug-sku"),
-        path("report-missing/", views.missing_report, name="report-missing"),  # Liste fehlender SKUs
+        path("report-missing/", views.missing_report, name="report-missing"),
     ]
 
     def get_menu_items(self, request):
@@ -66,8 +66,8 @@ class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
         },
         "use_graphql": {
             "name": "GraphQL verwenden",
-            "description": "Für performantere Suchen (REST ist stabiler für exakte SKU-Matches)",
-            "default": False,
+            "description": "Für performantere Suchen (REST + Fallback ist standardmäßig aktiv).",
+            "default": True,
             "type": "boolean",
         },
         "inv_target_location": {
@@ -111,5 +111,18 @@ class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
             "description": "Leerlassen = alle aktiven Parts. Unterkategorien werden automatisch mitgefiltert.",
             "default": "",
             "type": "string",
+        },
+        # NEU: Performance/Timeout-Kontrolle
+        "throttle_ms": {
+            "name": "Throttle pro Artikel (ms)",
+            "description": "Kurze Pause zwischen Artikeln, entlastet Rate-Limits & Proxy-Timeouts.",
+            "default": 150,
+            "type": "integer",
+        },
+        "max_parts_per_run": {
+            "name": "Max. Artikel pro Lauf",
+            "description": "Begrenzt die Zahl der Artikel pro Sync-Request (0 = unlimitiert).",
+            "default": 60,
+            "type": "integer",
         },
     }
