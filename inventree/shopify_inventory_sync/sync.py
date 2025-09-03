@@ -1,4 +1,3 @@
-# inventree/shopify_inventory_sync/sync.py
 from typing import Dict, Any, Iterable
 from django.db import transaction
 import os
@@ -107,7 +106,7 @@ def run_full_sync(plugin, user) -> Dict[str, Any]:
         target_qty = int(avail)
         delta = target_qty - current_qty
 
-        if delta_guard and abs(delta) > delta_guard:
+        if delta_guard and abs(delta) > delta_guard:     
             skipped += 1
             details.append({
                 "part": part.pk, "ipn": sku,
@@ -124,7 +123,7 @@ def run_full_sync(plugin, user) -> Dict[str, Any]:
                 "delta": delta
             })
             continue
-
+ s
         with transaction.atomic():
             res = _stocktake_with_note(mirror, user, target_qty, note_text)
             if res.get("changed"):
