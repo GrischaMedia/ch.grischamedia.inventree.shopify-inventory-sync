@@ -18,6 +18,7 @@ class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
         path("ping/", views.ping, name="ping"),
         path("sync-now/", views.sync_now, name="sync-now"),
         path("sync-now-open/", views.sync_now_open, name="sync-now-open"),
+        path("settings/", views.settings_form, name="settings"),
     ]
 
     # (Optional) Menüeinträge – InvenTree baut dir die korrekten Links
@@ -43,6 +44,7 @@ class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
     # ✅ Explizite Typen, damit das Settings-Form sicher rendert
     SETTINGS = {
         "shop_domain": {"name": "Shopify Shop Domain", "description": "z. B. my-shop.myshopify.com", "default": "", "type": "string"},
+        {"name": "Shopify Sync – Settings", "link": reverse(f"{ns}-settings"), "icon": "fa-cog"},
         "admin_api_token": {"name": "Admin API Token", "description": "Shopify Admin API Access Token", "default": "", "protected": True, "type": "string"},
         "use_graphql": {"name": "GraphQL verwenden", "description": "Für performantere SKU-Suchen", "default": True, "type": "boolean"},
         "inv_target_location": {"name": "InvenTree Ziel-Lagerort (ID)", "description": "ID des Lagerorts 'Onlineshop'", "default": "", "type": "string"},
