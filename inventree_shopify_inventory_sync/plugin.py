@@ -7,10 +7,10 @@ class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
     Shopify → InvenTree Bestandsabgleich (SKU == IPN)
     """
     NAME = "ShopifyInventorySync"
-    SLUG = "shopify-inventory-sync"
+    SLUG = "shopify-inventory-sync"  # <== WICHTIG: Mount-Pfad /plugin/shopify-inventory-sync/
     TITLE = "Shopify Inventory Sync"
     DESCRIPTION = "Liest Bestände aus Shopify (per SKU) und bucht Bestandskorrekturen in InvenTree (IPN-Match)."
-    VERSION = "0.0.40"
+    VERSION = "0.0.41"
     AUTHOR = "GrischaMedia / Grischabock (Sandro Geyer)"
     WEBSITE = ""
 
@@ -85,13 +85,13 @@ class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
         },
     }
 
-    # WICHTIG: Routen direkt hier registrieren – KEINE urls.py
+    # === WICHTIG ===
+    # Routen werden DIREKT hier registriert. KEINE urls.py im Paket!
     def setup_urls(self):
         from django.urls import path
         from . import views
 
         return [
-            # Nur funktionierende JSON-/Tool-Endpoints, kein Root-Pfad:
             path("sync-now-open/", views.sync_now_open, name="shopify_sync_now"),
             path("report-missing/", views.report_missing, name="shopify_sync_missing"),
             path("debug-sku/", views.debug_sku, name="shopify_debug_sku"),
@@ -99,11 +99,10 @@ class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
             path("save-settings/", views.save_settings, name="shopify_sync_save"),
         ]
 
-    # Kompatibler Fallback (ältere InvenTree-Versionen)
+    # Kompatibilität für ältere InvenTree-Versionen
     def get_urls(self):
         return self.setup_urls()
 
-    # „Öffnen“-Link im Plugin-Dialog zeigt auf den bewährten JSON-Endpoint (mit ?ui=1)
-    # Falls ?ui=1 vom Reverse-Proxy rausgefiltert wird, öffnet /sync-json/ eben das Roh-JSON.
+    # Öffnen-Link im Plugin-Menü: auf bewährten JSON-Endpoint zeigen (kein /settings/, kein /panel/)
     def get_plugin_url(self):
-        return f"/plugin/{self.SLUG}/sync-json/?ui=1"
+        return f"/plugin/{self.SLUG}/sync-now-open/"
