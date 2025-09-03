@@ -1,27 +1,33 @@
+# inventree_shopify_inventory_sync/plugin.py
+
 from plugin import InvenTreePlugin
 from plugin.mixins import SettingsMixin, UrlsMixin
 from django.urls import path, reverse
 
-from . import views  # <— unsere View-Funktionen liegen in views.py
+from . import views
+
 
 class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
+    """
+    Shopify → InvenTree Bestandsabgleich (SKU == IPN)
+    """
     NAME = "ShopifyInventorySync"
-    SLUG = "shopify-inventory-sync"  # → URL-Basis: /plugin/shopify-inventory-sync/
+    SLUG = "shopify-inventory-sync"  # URL-Basis: /plugin/shopify-inventory-sync/
     TITLE = "Shopify → InvenTree Inventory Sync (SKU == IPN)"
     DESCRIPTION = "Liest Bestände aus Shopify (per SKU) und bucht Bestandskorrekturen in InvenTree (IPN-Match)."
     VERSION = "0.0.12"
     AUTHOR = "GrischaMedia / Grischabock (Sandro Geyer)"
 
-    # ✅ WICHTIG: Routen über URLS registrieren (wie beim funktionierenden Plugin)
+    # WICHTIG: UrlsMixin nutzt diese Konstante – wie beim funktionierenden In/Out-Plugin
     URLS = [
         path("", views.index, name="index"),
         path("ping/", views.ping, name="ping"),
         path("sync-now/", views.sync_now, name="sync-now"),
         path("sync-now-open/", views.sync_now_open, name="sync-now-open"),
-        path("settings/", views.settings_form, name="settings"),
+        path("config/", views.settings_form, name="config"),  # eigene Settings-Seite (Superuser-only)
     ]
 
-    # (Optional) Menüeinträge – InvenTree baut dir die korrekten Links
+    # Optionales Menü im InvenTree-UI
     def get_menu_items(self, request):
         try:
             allowed = request.user.is_authenticated and (
@@ -36,21 +42,68 @@ class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
         ns = f"plugin:{self.SLUG}"
         return [
             {"name": "Shopify Sync – Übersicht", "link": reverse(f"{ns}-index"), "icon": "fa-external-link-alt"},
+            {"name": "Shopify Sync – Config", "link": reverse(f"{ns}-config"), "icon": "fa-cog"},
             {"name": "Shopify Sync jetzt (open)", "link": reverse(f"{ns}-sync-now-open"), "icon": "fa-sync"},
             {"name": "Shopify Sync jetzt", "link": reverse(f"{ns}-sync-now"), "icon": "fa-sync"},
             {"name": "Ping", "link": reverse(f"{ns}-ping"), "icon": "fa-circle"},
         ]
 
-    # ✅ Explizite Typen, damit das Settings-Form sicher rendert
+    # Explizite Typen, damit die Core-Settings-UI (falls genutzt) korrekt rendert.
+    # Unsere eigene Config-Seite nutzt dieselben Keys.
     SETTINGS = {
-        "shop_domain": {"name": "Shopify Shop Domain", "description": "z. B. my-shop.myshopify.com", "default": "", "type": "string"},
-        {"name": "Shopify Sync – Settings", "link": reverse(f"{ns}-settings"), "icon": "fa-cog"},
-        "admin_api_token": {"name": "Admin API Token", "description": "Shopify Admin API Access Token", "default": "", "protected": True, "type": "string"},
-        "use_graphql": {"name": "GraphQL verwenden", "description": "Für performantere SKU-Suchen", "default": True, "type": "boolean"},
-        "inv_target_location": {"name": "InvenTree Ziel-Lagerort (ID)", "description": "ID des Lagerorts 'Onlineshop'", "default": "", "type": "string"},
-        "auto_schedule_minutes": {"name": "Auto-Sync Intervall (Minuten)", "description": "0 = aus (extern via Cron)", "default": 30, "type": "integer"},
-        "delta_guard": {"name": "Delta-Limit pro Artikel", "description": "Max. absolute Anpassung pro Sync (0=aus)", "default": 0, "type": "integer"},
-        "dry_run": {"name": "Dry-Run", "description": "Nur lesen, keine Buchungen", "default": True, "type": "boolean"},
-        "note_text": {"name": "Buchungsnotiz", "description": "Notiz für Stock-Adjustments", "default": "Korrektur durch Onlineshop", "type": "string"},
-        "filter_category_ids": {"name": "Nur Kategorien (IDs, komma-getrennt)", "description": "Leer = alle aktiven Parts", "default": "", "type": "string"},
+        "shop_domain": {
+            "name": "Shopify Shop Domain",
+            "description": "z. B. my-shop.myshopify.com",
+            "default": "",
+            "type": "string",
+        },
+        "admin_api_token": {
+            "name": "Admin API Token",
+            "description": "Shopify Admin API Access Token",
+            "default": "",
+            "protected": True,
+            "type": "string",
+        },
+        "use_graphql": {
+            "name": "GraphQL verwenden",
+            "description": "Für performantere SKU-Suchen",
+            "default": True,
+            "type": "boolean",
+        },
+        "inv_target_location": {
+            "name": "InvenTree Ziel-Lagerort (ID)",
+            "description": "ID des Lagerorts 'Onlineshop'",
+            "default": "",
+            "type": "string",
+        },
+        "auto_schedule_minutes": {
+            "name": "Auto-Sync Intervall (Minuten)",
+            "description": "0 = aus (extern via Cron)",
+            "default": 30,
+            "type": "integer",
+        },
+        "delta_guard": {
+            "name": "Delta-Limit pro Artikel",
+            "description": "Max. absolute Anpassung pro Sync (0=aus)",
+            "default": 0,
+            "type": "integer",
+        },
+        "dry_run": {
+            "name": "Dry-Run",
+            "description": "Nur lesen, keine Buchungen",
+            "default": True,
+            "type": "boolean",
+        },
+        "note_text": {
+            "name": "Buchungsnotiz",
+            "description": "Notiz für Stock-Adjustments",
+            "default": "Korrektur durch Onlineshop",
+            "type": "string",
+        },
+        "filter_category_ids": {
+            "name": "Nur Kategorien (IDs, komma-getrennt)",
+            "description": "Leer = alle aktiven Parts",
+            "default": "",
+            "type": "string",
+        },
     }
