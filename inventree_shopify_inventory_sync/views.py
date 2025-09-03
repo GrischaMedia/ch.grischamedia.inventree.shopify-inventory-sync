@@ -1,8 +1,4 @@
-from django.http import (
-    JsonResponse,
-    HttpResponseForbidden,
-    HttpResponseRedirect,
-)
+from django.http import JsonResponse, HttpResponseForbidden
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.shortcuts import render
 from django.utils.timezone import now
@@ -30,13 +26,8 @@ def _allowed(u):
         return False
 
 
-def index_redirect(request):
-    """ /plugin/<slug>/  ->  /plugin/<slug>/settings/ """
-    return HttpResponseRedirect(f"/plugin/{SLUG}/settings/")
-
-
 def _coerce(value, validator):
-    """Werte aus dem POST in den richtigen Typ umwandeln."""
+    """Werte aus POST in den richtigen Typ umwandeln."""
     if validator == "bool":
         if isinstance(value, bool):
             return value
@@ -52,7 +43,7 @@ def _coerce(value, validator):
 
 
 @login_required
-def settings_view(request):
+def open_panel(request):
     """
     Konfigurationsseite mit linkem Settings-Panel und rechtem Live-Panel.
     POST speichert alle Settings über set_setting().
@@ -64,12 +55,11 @@ def settings_view(request):
 
     flash = None
 
-    # Speichern der Settings (alle Felder, die im Template ausgegeben werden)
+    # Settings speichern
     if request.method == "POST":
-        defs = p.get_settings()  # liefert {key: SettingObject}
+        defs = p.get_settings()  # {key: SettingObject}
         for key, meta in defs.items():
             raw = request.POST.get(key, "")
-            # Validator aus Plugin-Definition ermitteln
             vdef = None
             try:
                 vdef = p.SETTINGS.get(key, {}).get("validator", None)
@@ -79,7 +69,7 @@ def settings_view(request):
             p.set_setting(key, coerced, user=request.user)
         flash = "Einstellungen gespeichert."
 
-    # "Sync jetzt starten" via Button
+    # "Sync jetzt starten"
     if request.GET.get("run") == "1":
         if not _allowed(request.user):
             return HttpResponseForbidden("Keine Berechtigung")
@@ -88,11 +78,11 @@ def settings_view(request):
         _last_sync_at = now()
         flash = (flash + " " if flash else "") + "Sync ausgeführt."
 
-    # Settings + aktuelle Werte für das Formular aufbereiten
-    defs = []
+    # Settings + Werte fürs Formular
+    defs_ui = []
     current = p.get_settings()
     for key, meta in p.SETTINGS.items():
-        defs.append({
+        defs_ui.append({
             "key": key,
             "name": meta.get("name", key),
             "description": meta.get("description", ""),
@@ -104,7 +94,7 @@ def settings_view(request):
         "slug": SLUG,
         "version": getattr(p, "VERSION", "n/a"),
         "flash": flash,
-        "plugin_settings": defs,           # <- fürs Template
+        "plugin_settings": defs_ui,  # <-- fürs Template
         "last_sync_at": _last_sync_at,
         "last_sync_summary": _summarize(_last_sync_result) if _last_sync_result else None,
         "last_sync_json": _last_sync_result,

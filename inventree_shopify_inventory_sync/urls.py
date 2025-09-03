@@ -2,11 +2,11 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
-    # Root des Plugins -> sicher auf /settings/ weiterleiten
-    path("", views.index_redirect, name="shopify_sync_root"),
+    # Root des Plugins -> direkt unsere Panel-View (kein Redirect!)
+    path("", views.open_panel, name="shopify_sync_root"),
 
-    # Einstellungsseite (mit Styling & Live-Panel)
-    path("settings/", views.settings_view, name="shopify_sync_settings"),
+    # Eigener, konfliktfreier Pfad für das UI
+    path("panel/", views.open_panel, name="shopify_sync_panel"),
 
     # Aktionen / Tools
     path("sync-now-open/", views.sync_now_open, name="shopify_sync_now"),

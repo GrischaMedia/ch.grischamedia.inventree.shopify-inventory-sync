@@ -10,7 +10,7 @@ class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
     SLUG = "shopify-inventory-sync"
     TITLE = "Shopify Inventory Sync"
     DESCRIPTION = "Liest Bestände aus Shopify (per SKU) und bucht Bestandskorrekturen in InvenTree (IPN-Match)."
-    VERSION = "0.0.28"
+    VERSION = "0.0.29"
     AUTHOR = "GrischaMedia / Grischabock (Sandro Geyer)"
     WEBSITE = ""
 
@@ -91,7 +91,7 @@ class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
 
     def get_plugin_url(self):
         """
-        Immer direkt auf die Settings-Unterseite zeigen.
-        Kein reverse(); statischer Pfad ist in allen Setups stabil.
+        Zeige im Plugin-Dialog immer direkt auf unseren konfliktfreien Pfad.
+        Keine 'settings/'-Route, kein reverse(), nur statisch.
         """
-        return f"/plugin/{self.SLUG}/settings/"
+        return f"/plugin/{self.SLUG}/panel/"
