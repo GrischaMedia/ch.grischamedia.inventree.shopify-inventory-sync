@@ -23,15 +23,25 @@ def _ensure_target_location(loc_id: str | int) -> StockLocation | None:
         child = StockLocation.objects.filter(parent=loc, structural=False).first()
         if child:
             return child
-        # optional könnte man hier eines anlegen – wir lassen es bewusst
+        # optional: hier könnte man automatisch ein Kind anlegen – bewusst ausgelassen
         return None
 
     return loc
 
 
 def _get_or_create_mirror_item(part: Part, location: StockLocation) -> StockItem:
-    """StockItem am Ziel-Lagerort sicherstellen (existiert oder wird mit 0 angelegt)."""
-    item = StockItem.objects.filter(part=part, location=location, is_building=False, is_allocated=False).first()
+    """
+    StockItem am Ziel-Lagerort sicherstellen (existiert oder wird mit 0 angelegt).
+
+    Hinweis: Manche InvenTree-Versionen besitzen KEIN Feld 'is_allocated'.
+    Darum filtern wir nur nach part/location und is_building.
+    """
+    item = (
+        StockItem.objects
+        .filter(part=part, location=location, is_building=False)
+        .order_by("id")
+        .first()
+    )
     if item:
         return item
     return StockItem.objects.create(part=part, location=location, quantity=0)
@@ -133,15 +143,15 @@ def run_full_sync(plugin, user):
         if dry_run or delta == 0:
             preview.append({
                 "part": part.pk, "ipn": ipn, "current": current, "target": int(target),
-                "delta": delta, "status": "dry_run"
+                "delta": delta, "status": "dry_run" if dry_run else "no_change"
             })
         else:
             with transaction.atomic():
-                # In InvenTree existiert eine helper-Methode adjustStock; falls nicht verfügbar, quantity direkt setzen.
+                # Versuch: offizielle Methode adjustStock (falls vorhanden)
                 try:
                     mirror.adjustStock(delta, user=user, notes=note)  # type: ignore[attr-defined]
                 except Exception:
-                    # Fallback: Menge setzen (ohne Historie). Nur wenn adjustStock nicht vorhanden.
+                    # Fallback: Menge direkt setzen (ohne Historie, simpel & robust)
                     mirror.quantity = int(target)
                     mirror.save()
             changed += 1
