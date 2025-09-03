@@ -9,13 +9,10 @@ description = "Shopify → InvenTree Inventory Sync (SKU == IPN) via Stock Adjus
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "GrischaMedia / Grischabock (Sandro Geyer)" }]
-dependencies = [
-  "requests>=2.31"
-]
+dependencies = ["requests>=2.31"]
 
 [project.entry-points."inventree_plugins"]
-shopify_inventory_sync = "ch.grischamedia.inventree.shopify_inventory_sync.plugin:ShopifyInventorySyncPlugin"
+shopify_inventory_sync = "inventree.shopify_inventory_sync.plugin:ShopifyInventorySyncPlugin"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["ch.*"]
+[tool.setuptools]
+packages = ["inventree.shopify_inventory_sync"]
