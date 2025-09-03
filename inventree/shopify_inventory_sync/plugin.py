@@ -1,7 +1,7 @@
 # inventree/shopify_inventory_sync/plugin.py
 from plugin import InvenTreePlugin
 from plugin.mixins import SettingsMixin, AppMixin
-from django.urls import path
+from django.urls import path, reverse
 from django.http import JsonResponse, HttpResponseForbidden
 from django.contrib.auth.decorators import login_required, user_passes_test
 
@@ -9,10 +9,7 @@ from .sync import run_full_sync
 
 
 def _is_allowed(user):
-    """
-    Erlaube Superuser immer; sonst genügt das Recht, StockItems zu ändern.
-    (Verhindert Redirects auf die Startseite.)
-    """
+    """Erlaube Superuser immer; sonst genügt das Recht, StockItems zu ändern."""
     return bool(user.is_superuser or user.has_perm("stock.change_stockitem"))
 
 
@@ -24,18 +21,18 @@ class ShopifyInventorySyncPlugin(SettingsMixin, AppMixin, InvenTreePlugin):
     SLUG = "shopify-inventory-sync"
     TITLE = "Shopify → InvenTree Inventory Sync (SKU == IPN)"
     DESCRIPTION = "Liest Bestände aus Shopify (per SKU) und bucht Bestandskorrekturen in InvenTree (IPN-Match)."
-    VERSION = "0.0.3"
+    VERSION = "0.0.4"
     AUTHOR = "GrischaMedia / Grischabock (Sandro Geyer)"
 
     SETTINGS = {
         "shop_domain": {
             "name": "Shopify Shop Domain",
-            "description": "z. B. my-shop.myshopify.com (kann auch via ENV gesetzt werden: SHOPIFY_SHOP_DOMAIN)",
+            "description": "z. B. my-shop.myshopify.com (ENV: SHOPIFY_SHOP_DOMAIN)",
             "default": "",
         },
         "admin_api_token": {
             "name": "Admin API Token",
-            "description": "Shopify Admin API Access Token (Custom App) (ENV: SHOPIFY_ADMIN_API_TOKEN)",
+            "description": "Shopify Admin API Access Token (ENV: SHOPIFY_ADMIN_API_TOKEN)",
             "default": "",
             "protected": True,
         },
@@ -76,12 +73,30 @@ class ShopifyInventorySyncPlugin(SettingsMixin, AppMixin, InvenTreePlugin):
         },
     }
 
+    # ---- Plugin-Menü (macht den Endpoint klickbar, URL wird korrekt gebaut) ----
+    def get_menu_items(self, request):
+        items = []
+        if request.user.is_authenticated and _is_allowed(request.user):
+            # Offene Debug-/Direkt-Route (zeigt 403 statt Redirect, wenn unberechtigt)
+            items.append({
+                "name": "Shopify Sync jetzt (open)",
+                "link": reverse("plugin:shopify_inventory_sync_now_open"),
+                "icon": "fa-sync",
+            })
+            # „normale“ Route mit Login + Rechteprüfung
+            items.append({
+                "name": "Shopify Sync jetzt",
+                "link": reverse("plugin:shopify_inventory_sync_now"),
+                "icon": "fa-sync",
+            })
+        return items
+
     # ---- Routing ----
     def get_urls(self):
         return [
-            # „saubere“ Route mit Login + Rechteprüfung
+            # Normale Route: Login + Permission Guard
             path("sync-now/", self._wrap(self.sync_now_view), name="shopify_inventory_sync_now"),
-            # offene Debug-/Fallback-Route mit klaren 403 (kein Redirect auf Startseite)
+            # Fallback/Debug: liefert klare 403/200 (kein Redirect auf Startseite)
             path("sync-now-open/", self.sync_now_open_view, name="shopify_inventory_sync_now_open"),
         ]
 
@@ -105,6 +120,6 @@ class ShopifyInventorySyncPlugin(SettingsMixin, AppMixin, InvenTreePlugin):
         result = run_full_sync(self, request.user)
         return JsonResponse(result)
 
-    # Hinweis zu Auto-Sync: wie gehabt extern (Cron) triggern oder Periodic Task nutzen.
     def setup(self, *args, **kwargs):
+        # Auto-Sync weiterhin extern (Cron/Task) triggern
         pass
