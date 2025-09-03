@@ -18,17 +18,17 @@ class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
     VERSION = "0.0.12"
     AUTHOR = "GrischaMedia / Grischabock (Sandro Geyer)"
 
-    # WICHTIG: UrlsMixin nutzt diese Konstante – wie beim funktionierenden In/Out-Plugin
+    # Routen (wie beim funktionierenden In/Out-Plugin über URLS)
     URLS = [
         path("", views.index, name="index"),
         path("ping/", views.ping, name="ping"),
         path("sync-now/", views.sync_now, name="sync-now"),
         path("sync-now-open/", views.sync_now_open, name="sync-now-open"),
-        path("config/", views.settings_form, name="config"),  # eigene Settings-Seite (Superuser-only)
-        path("debug-sku/", views.debug_sku, name="debug-sku"), 
+        path("config/", views.settings_form, name="config"),          # eigene, simple Config-Seite
+        path("debug-sku/", views.debug_sku, name="debug-sku"),        # gezieltes SKU-Debug gegen Shopify
     ]
 
-    # Optionales Menü im InvenTree-UI
+    # Menü
     def get_menu_items(self, request):
         try:
             allowed = request.user.is_authenticated and (
@@ -46,15 +46,15 @@ class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
             {"name": "Shopify Sync – Config", "link": reverse(f"{ns}-config"), "icon": "fa-cog"},
             {"name": "Shopify Sync jetzt (open)", "link": reverse(f"{ns}-sync-now-open"), "icon": "fa-sync"},
             {"name": "Shopify Sync jetzt", "link": reverse(f"{ns}-sync-now"), "icon": "fa-sync"},
+            {"name": "Debug SKU", "link": reverse(f"{ns}-debug-sku") + "?sku=MB-TEST", "icon": "fa-bug"},
             {"name": "Ping", "link": reverse(f"{ns}-ping"), "icon": "fa-circle"},
         ]
 
-    # Explizite Typen, damit die Core-Settings-UI (falls genutzt) korrekt rendert.
-    # Unsere eigene Config-Seite nutzt dieselben Keys.
+    # Settings (explizite Typen, damit auch die Core-UI korrekt wäre)
     SETTINGS = {
         "shop_domain": {
             "name": "Shopify Shop Domain",
-            "description": "z. B. my-shop.myshopify.com",
+            "description": "z. B. my-shop.myshopify.com (ohne https://)",
             "default": "",
             "type": "string",
         },
@@ -67,13 +67,13 @@ class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
         },
         "use_graphql": {
             "name": "GraphQL verwenden",
-            "description": "Für performantere SKU-Suchen",
-            "default": True,
+            "description": "Für performantere SKU-Suchen (REST ist stabiler für exakte SKU-Matches)",
+            "default": False,
             "type": "boolean",
         },
         "inv_target_location": {
             "name": "InvenTree Ziel-Lagerort (ID)",
-            "description": "ID des Lagerorts 'Onlineshop'",
+            "description": "ID des (nicht-strukturellen) Lagerorts für Online-Bestand",
             "default": "",
             "type": "string",
         },
@@ -86,7 +86,7 @@ class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
         "delta_guard": {
             "name": "Delta-Limit pro Artikel",
             "description": "Max. absolute Anpassung pro Sync (0=aus)",
-            "default": 0,
+            "default": 500,
             "type": "integer",
         },
         "dry_run": {
@@ -103,7 +103,7 @@ class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
         },
         "filter_category_ids": {
             "name": "Nur Kategorien (IDs, komma-getrennt)",
-            "description": "Leer = alle aktiven Parts",
+            "description": "Leerlassen = alle aktiven Parts. Unterkategorien werden automatisch mitgefiltert.",
             "default": "",
             "type": "string",
         },

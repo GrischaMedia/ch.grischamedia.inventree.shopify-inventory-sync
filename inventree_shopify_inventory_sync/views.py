@@ -5,6 +5,7 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.html import escape
 from django.shortcuts import redirect
+import requests
 
 from plugin.registry import registry
 from .sync import run_full_sync
@@ -13,9 +14,7 @@ SLUG = "shopify-inventory-sync"
 
 
 def _allowed(u):
-    """
-    Erlaubt Superuser immer; alternativ reicht das Recht, StockItems zu ändern.
-    """
+    """Erlaubt Superuser immer; alternativ reicht das Recht, StockItems zu ändern."""
     try:
         return bool(u.is_superuser or u.has_perm("stock.change_stockitem"))
     except Exception:
@@ -23,14 +22,11 @@ def _allowed(u):
 
 
 def _plugin():
-    """
-    Laufende Plugin-Instanz sicher aus der Registry holen.
-    (Robuster als request.plugin, das nicht in allen Builds gesetzt ist.)
-    """
+    """Laufende Plugin-Instanz sicher aus der Registry holen."""
     return registry.get_plugin(SLUG)
 
 
-# --- Public health endpoint: zeigt, ob URLs gemountet und Plugin geladen sind ---
+# --- Health ---
 def ping(request):
     p = _plugin()
     return JsonResponse({
@@ -42,9 +38,6 @@ def ping(request):
 
 @login_required
 def index(request):
-    """
-    Liefert Basisinfos + direkte Links auf die anderen Endpoints.
-    """
     p = _plugin()
     if p is None:
         return HttpResponseForbidden("plugin not loaded")
@@ -57,7 +50,8 @@ def index(request):
             "open": request.build_absolute_uri(f"{base}/sync-now-open/"),
             "guarded": request.build_absolute_uri(f"{base}/sync-now/"),
             "ping": request.build_absolute_uri(f"{base}/ping/"),
-            "settings": request.build_absolute_uri(f"{base}/settings/"),
+            "config": request.build_absolute_uri(f"{base}/config/"),
+            "debug_sku": request.build_absolute_uri(f"{base}/debug-sku/?sku=MB-TEST"),
         },
         "perms_ok": _allowed(request.user),
     }
@@ -67,9 +61,6 @@ def index(request):
 @login_required
 @user_passes_test(_allowed)
 def sync_now(request):
-    """
-    Guarded Sync (Login + Permission).
-    """
     p = _plugin()
     if p is None:
         return HttpResponseForbidden("plugin not loaded")
@@ -78,28 +69,18 @@ def sync_now(request):
 
 @login_required
 def sync_now_open(request):
-    """
-    „Offener“ Sync für eingeloggte User mit klaren 403 statt Redirects.
-    Nutzt dieselbe Permission-Logik wie sync_now, prüft sie aber manuell.
-    """
     if not _allowed(request.user):
         return HttpResponseForbidden("insufficient permissions")
-
     p = _plugin()
     if p is None:
         return HttpResponseForbidden("plugin not loaded")
-
     return JsonResponse(run_full_sync(p, request.user))
 
 
-# --- Einfache Settings-Seite im Plugin (Superuser-only) ---
-@csrf_exempt  # nur für Superuser zugänglich; CSRF optional später ergänzbar
+# --- Eigene, simple Settings-Seite (Superuser-only) ---
+@csrf_exempt  # nur für Superuser; CSRF später möglich
 @login_required
 def settings_form(request):
-    """
-    Minimalistische Einstellungsseite, die direkt die Plugin-Settings in InvenTree speichert.
-    So umgehst du die bockige Core-Modal-UI vollständig.
-    """
     if not request.user.is_superuser:
         return HttpResponseForbidden("superuser required")
 
@@ -107,7 +88,6 @@ def settings_form(request):
     if p is None:
         return HttpResponseForbidden("plugin not loaded")
 
-    # Keys müssen zu SETTINGS in plugin.py passen
     keys = [
         "shop_domain",
         "admin_api_token",
@@ -121,7 +101,6 @@ def settings_form(request):
     ]
 
     if request.method == "POST":
-        # Werte übernehmen und typgerecht konvertieren
         for k in keys:
             val = request.POST.get(k, "")
             if k in {"use_graphql", "dry_run"}:
@@ -132,14 +111,10 @@ def settings_form(request):
                 except Exception:
                     val = 0
             p.set_setting(k, val, user=request.user)
-
-        # PRG-Pattern: nach POST neu laden
         return redirect(request.path)
 
-    # Aktuelle Werte lesen
     values = {k: p.get_setting(k) for k in keys}
 
-    # Kleinste mögliche HTML-Seite, kein Template nötig
     html = [
         "<html><head><meta charset='utf-8'><title>Shopify Sync Settings</title></head><body>",
         "<h1>Shopify Sync – Einstellungen</h1>",
@@ -161,10 +136,10 @@ def settings_form(request):
 
     html.append(row("Shopify Shop Domain", "shop_domain", values.get("shop_domain", "")))
     html.append(row("Admin API Token", "admin_api_token", values.get("admin_api_token", ""), "password"))
-    html.append(row("GraphQL verwenden (true/false)", "use_graphql", values.get("use_graphql", True)))
+    html.append(row("GraphQL verwenden (true/false)", "use_graphql", values.get("use_graphql", False)))
     html.append(row("InvenTree Ziel-Lagerort (ID)", "inv_target_location", values.get("inv_target_location", "")))
     html.append(row("Auto-Sync Intervall Minuten", "auto_schedule_minutes", values.get("auto_schedule_minutes", 30)))
-    html.append(row("Delta-Guard", "delta_guard", values.get("delta_guard", 0)))
+    html.append(row("Delta-Guard", "delta_guard", values.get("delta_guard", 500)))
     html.append(row("Dry-Run (true/false)", "dry_run", values.get("dry_run", True)))
     html.append(row("Buchungsnotiz", "note_text", values.get("note_text", "Korrektur durch Onlineshop")))
     html.append(row("Nur Kategorien (IDs, komma-getrennt)", "filter_category_ids", values.get("filter_category_ids", "")))
@@ -178,59 +153,88 @@ def settings_form(request):
     ]
     return HttpResponse("\n".join(html))
 
-#SKU TEST
+
+# --- Gezielt eine SKU gegen Shopify prüfen (REST, exakte Matches) ---
 @login_required
 def debug_sku(request):
     if not request.user.is_superuser:
         return HttpResponseForbidden("superuser required")
+
     p = _plugin()
     if p is None:
         return HttpResponseForbidden("plugin not loaded")
 
-    sku = request.GET.get("sku", "").strip()
+    sku = (request.GET.get("sku") or "").strip()
     if not sku:
         return JsonResponse({"ok": False, "error": "param ?sku=... fehlt"})
 
-    # Shopify-Client wie im Sync
-    from .shopify_client import ShopifyClient
-    domain = p.get_setting("shop_domain")
+    domain = (p.get_setting("shop_domain") or "").strip().lower()
+    domain = domain.replace("https://", "").replace("http://", "").strip("/")
     token = p.get_setting("admin_api_token")
-    use_graphql = bool(p.get_setting("use_graphql"))
-    client = ShopifyClient(domain, token, use_graphql=False)  # fürs Debug REST nutzen
+    api_ver = "2024-10"
 
-    # 1) Variante finden
-    variant = client.find_variant_by_sku(sku)
-    if not variant:
-        return JsonResponse({"ok": False, "sku": sku, "error": "variant_not_found"})
+    sess = requests.Session()
+    sess.headers.update({
+        "X-Shopify-Access-Token": token,
+        "Content-Type": "application/json",
+    })
 
-    inv_item_id = variant.get("inventoryItemId")
+    base = f"https://{domain}/admin/api/{api_ver}"
 
-    # 2) Alle Locations & Levels holen (roh), um zu sehen, was Shopify liefert
+    # 1) exakte Varianten-Suche
+    vres = sess.get(f"{base}/variants.json", params={"sku": sku}, timeout=20)
     try:
-        locs = client._rest_get(f"/admin/api/2024-10/locations.json").get("locations", [])
+        vres.raise_for_status()
     except Exception as e:
-        return JsonResponse({"ok": False, "sku": sku, "variant": variant, "error": f"locations_error: {e}"})
+        return JsonResponse({"ok": False, "sku": sku, "error": f"variants_http_error: {e}", "status": vres.status_code})
 
+    variants = (vres.json() or {}).get("variants", []) or []
+    variant = None
+    for v in variants:
+        if (v.get("sku") or "").strip() == sku:
+            variant = {
+                "id": v.get("id"),
+                "sku": v.get("sku"),
+                "inventory_item_id": v.get("inventory_item_id"),
+                "product_id": v.get("product_id"),
+                "title": v.get("title"),
+            }
+            break
+
+    if not variant:
+        return JsonResponse({"ok": False, "sku": sku, "error": "variant_not_found_rest", "raw_count": len(variants)})
+
+    inv_item_id = variant["inventory_item_id"]
+
+    # 2) Locations
+    locres = sess.get(f"{base}/locations.json", timeout=20)
+    try:
+        locres.raise_for_status()
+    except Exception as e:
+        return JsonResponse({"ok": False, "sku": sku, "variant": variant, "error": f"locations_http_error: {e}", "status": locres.status_code})
+
+    locations = (locres.json() or {}).get("locations", []) or []
+
+    # 3) Levels je Location
     levels = []
     total = 0
-    for loc in locs:
+    for loc in locations:
         lid = loc.get("id")
-        try:
-            j = client._rest_get(
-                f"/admin/api/2024-10/inventory_levels.json",
-                params={"inventory_item_ids": inv_item_id, "location_ids": lid},
-            )
-            for lvl in j.get("inventory_levels", []) or []:
+        lname = loc.get("name")
+        lres = sess.get(
+            f"{base}/inventory_levels.json",
+            params={"inventory_item_ids": inv_item_id, "location_ids": lid},
+            timeout=20,
+        )
+        if lres.status_code == 200:
+            j = lres.json() or {}
+            for lvl in (j.get("inventory_levels") or []):
                 avail = lvl.get("available")
-                levels.append({
-                    "location_id": lid,
-                    "location_name": loc.get("name"),
-                    "available": avail,
-                })
+                levels.append({"location_id": lid, "location_name": lname, "available": avail})
                 if avail is not None:
                     total += int(avail)
-        except Exception as e:
-            levels.append({"location_id": lid, "location_name": loc.get("name"), "error": str(e)})
+        else:
+            levels.append({"location_id": lid, "location_name": lname, "error": f"HTTP {lres.status_code}"})
 
     return JsonResponse({
         "ok": True,
