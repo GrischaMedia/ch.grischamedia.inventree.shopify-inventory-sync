@@ -43,7 +43,7 @@ def _coerce(value, validator):
 
 
 @login_required
-def open_panel(request):
+def settings_view(request):
     """
     Konfigurationsseite mit linkem Settings-Panel und rechtem Live-Panel.
     POST speichert alle Settings über set_setting().

@@ -30,9 +30,6 @@
     .tag{display:inline-block; padding:3px 8px; border-radius:999px; border:1px solid var(--border); color:var(--muted)}
     .flash{background:#102a17; border:1px solid #184a2a; color:#b8ffd0; padding:10px 12px; border-radius:10px; margin:10px 0}
     .muted{color:var(--muted)}
-    .k{color:#9bc0ff}
-    .v{color:#7bd389}
-    .err{color:var(--danger)}
     .form dl{display:grid; grid-template-columns: 240px 1fr; gap:10px 12px}
     @media (max-width: 720px){ .form dl{grid-template-columns:1fr} }
     .form dt{color:var(--muted); align-self:center}
@@ -53,7 +50,6 @@
     {% if flash %}<div class="flash">{{ flash }}</div>{% endif %}
 
     <div class="grid">
-      <!-- LEFT: Settings & Actions -->
       <div class="card">
         <div class="toolbar" style="margin-bottom:10px">
           <a class="btn" href="?run=1">Sync jetzt starten</a>
@@ -80,7 +76,6 @@
         </form>
       </div>
 
-      <!-- RIGHT: Live Result -->
       <div class="card sticky">
         <div class="row" style="justify-content:space-between; align-items:center; margin-bottom:8px">
           <div class="muted small">Letzter Sync</div>
@@ -123,7 +118,6 @@ Noch kein Ergebnis vorhanden.
   </div>
 
   <script>
-    // Mini-Fetch für „Sync jetzt starten“ ohne Seiten-Reload (rechte Box)
     const btn = document.getElementById('runBtn');
     const pre = document.getElementById('live-pre');
 
