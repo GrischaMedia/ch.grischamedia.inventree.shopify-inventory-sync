@@ -177,3 +177,65 @@ def settings_form(request):
         "</body></html>",
     ]
     return HttpResponse("\n".join(html))
+
+#SKU TEST
+@login_required
+def debug_sku(request):
+    if not request.user.is_superuser:
+        return HttpResponseForbidden("superuser required")
+    p = _plugin()
+    if p is None:
+        return HttpResponseForbidden("plugin not loaded")
+
+    sku = request.GET.get("sku", "").strip()
+    if not sku:
+        return JsonResponse({"ok": False, "error": "param ?sku=... fehlt"})
+
+    # Shopify-Client wie im Sync
+    from .shopify_client import ShopifyClient
+    domain = p.get_setting("shop_domain")
+    token = p.get_setting("admin_api_token")
+    use_graphql = bool(p.get_setting("use_graphql"))
+    client = ShopifyClient(domain, token, use_graphql=False)  # fürs Debug REST nutzen
+
+    # 1) Variante finden
+    variant = client.find_variant_by_sku(sku)
+    if not variant:
+        return JsonResponse({"ok": False, "sku": sku, "error": "variant_not_found"})
+
+    inv_item_id = variant.get("inventoryItemId")
+
+    # 2) Alle Locations & Levels holen (roh), um zu sehen, was Shopify liefert
+    try:
+        locs = client._rest_get(f"/admin/api/2024-10/locations.json").get("locations", [])
+    except Exception as e:
+        return JsonResponse({"ok": False, "sku": sku, "variant": variant, "error": f"locations_error: {e}"})
+
+    levels = []
+    total = 0
+    for loc in locs:
+        lid = loc.get("id")
+        try:
+            j = client._rest_get(
+                f"/admin/api/2024-10/inventory_levels.json",
+                params={"inventory_item_ids": inv_item_id, "location_ids": lid},
+            )
+            for lvl in j.get("inventory_levels", []) or []:
+                avail = lvl.get("available")
+                levels.append({
+                    "location_id": lid,
+                    "location_name": loc.get("name"),
+                    "available": avail,
+                })
+                if avail is not None:
+                    total += int(avail)
+        except Exception as e:
+            levels.append({"location_id": lid, "location_name": loc.get("name"), "error": str(e)})
+
+    return JsonResponse({
+        "ok": True,
+        "sku": sku,
+        "variant": variant,
+        "sum_available": total,
+        "levels": levels,
+    })

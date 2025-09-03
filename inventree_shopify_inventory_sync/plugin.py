@@ -25,6 +25,7 @@ class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
         path("sync-now/", views.sync_now, name="sync-now"),
         path("sync-now-open/", views.sync_now_open, name="sync-now-open"),
         path("config/", views.settings_form, name="config"),  # eigene Settings-Seite (Superuser-only)
+        path("debug-sku/", views.debug_sku, name="debug-sku"), 
     ]
 
     # Optionales Menü im InvenTree-UI
