@@ -1,0 +1,138 @@
+{% load static %}
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <title>Shopify Sync</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    :root{
+      --bg:#0b1020; --panel:#101833; --muted:#8ea3c3; --text:#e8eefb; --accent:#4da3ff;
+      --ok:#7bd389; --warn:#ffcc66; --danger:#ff5c6b; --border:#1d2747;
+    }
+    *{box-sizing:border-box}
+    body{margin:0; font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu; background:var(--bg); color:var(--text);}
+    a{color:var(--accent); text-decoration:none}
+    .wrap{max-width:1200px; margin:24px auto; padding:0 16px;}
+    h1{margin:0 0 12px 0; font-size:24px}
+    .muted{color:var(--muted)}
+    .grid{display:grid; grid-template-columns: 520px 1fr; gap:20px}
+    @media (max-width: 1000px){ .grid{grid-template-columns:1fr} }
+    .card{background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:16px;}
+    .row{display:flex; gap:8px; flex-wrap:wrap; align-items:center}
+    .btn{border:1px solid var(--border); background:#162149; color:var(--text); padding:10px 14px; border-radius:10px; font-weight:600; cursor:pointer}
+    .btn:hover{background:#1a2760}
+    .btn.ghost{background:transparent}
+    .tag{display:inline-block; padding:3px 8px; border-radius:999px; border:1px solid var(--border)}
+    .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--danger)}
+    .kv{display:grid; grid-template-columns: 200px 1fr; gap:6px 10px; margin-top:8px}
+    .kv div{padding:4px 0; border-bottom:1px dashed var(--border)}
+    .kv div:nth-child(odd){color:var(--muted)}
+    pre{white-space:pre-wrap; word-break:break-word; background:#0d142b; border:1px solid var(--border); border-radius:10px; padding:12px; max-height:60vh; overflow:auto; margin:0}
+    .sum-line{display:flex; gap:10px; flex-wrap:wrap; margin:8px 0}
+    .sum-line span{background:#0d1530; border:1px solid var(--border); padding:6px 10px; border-radius:10px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Shopify Sync <span class="muted">({{ version }})</span></h1>
+    <div class="grid">
+      <!-- Links: Aktionen & Status -->
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
+          <div class="row">
+            <button id="runBtn" class="btn">Sync jetzt starten</button>
+            <a class="btn ghost" href="?ui=1&run=1">neu laden & laufen</a>
+          </div>
+          <span class="tag">Plugin: {{ slug }}</span>
+        </div>
+
+        <div class="sum-line">
+          <span>Letzter Sync: {{ last_sync_at|default:"–" }}</span>
+          <span>{{ last_sync_summary|default:"–" }}</span>
+        </div>
+
+        <div class="kv">
+          <div>Shop Domain</div><div>{{ settings.shop_domain|default:"–" }}</div>
+          <div>GraphQL</div><div>{% if settings.use_graphql %}<b class="ok">an</b>{% else %}<span class="muted">aus</span>{% endif %}</div>
+          <div>Nur Standort</div><div>{{ settings.only_location_name|default:"(alle)" }}</div>
+          <div>Ziel-Lagerort (ID)</div><div>{{ settings.target_location_id|default:"–" }}</div>
+          <div>Delta-Guard</div><div>{{ settings.delta_guard|default:"0" }}</div>
+          <div>Dry-Run</div><div>{% if settings.dry_run %}<b class="warn">Dry-Run</b>{% else %}<b class="ok">Live</b>{% endif %}</div>
+          <div>Max Parts / Run</div><div>{{ settings.max_parts_per_run|default:"–" }}</div>
+          <div>Throttle (ms)</div><div>{{ settings.throttle_ms|default:"–" }}</div>
+        </div>
+
+        <div class="row" style="margin-top:12px">
+          <a class="btn ghost" href="../report-missing/" target="_blank">fehlende SKUs (JSON)</a>
+          <a class="btn ghost" href="../sync-json/" target="_blank">letztes Ergebnis (JSON)</a>
+        </div>
+      </div>
+
+      <!-- Rechts: Live-JSON -->
+      <div class="card">
+        <div class="row" style="justify-content:space-between; margin-bottom:6px">
+          <div class="muted">Live-Ergebnis</div>
+          <div class="row">
+            <input id="skuInput" class="btn ghost" style="min-width:220px" placeholder="SKU debuggen …">
+            <button id="dbgBtn" class="btn">Debug</button>
+          </div>
+        </div>
+        <pre id="livePre">Noch kein Ergebnis vorhanden.</pre>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const runBtn = document.getElementById('runBtn');
+    const dbgBtn = document.getElementById('dbgBtn');
+    const skuInput = document.getElementById('skuInput');
+    const livePre = document.getElementById('livePre');
+
+    // Initial: letztes Ergebnis anzeigen (vom Server gerendert)
+    try {
+      const serverData = {{ last_sync_json|default:"{}"|safe }};
+      if (serverData && Object.keys(serverData).length) {
+        livePre.textContent = JSON.stringify(serverData, null, 2);
+      }
+    } catch(e) { /* ignore */ }
+
+    const baseSyncUrl = window.location.pathname.replace(/\/+$/, "") + "/";
+
+    async function runSync() {
+      runBtn.disabled = true;
+      const old = runBtn.textContent;
+      runBtn.textContent = "Sync läuft …";
+      try {
+        const r = await fetch(baseSyncUrl, { headers: { "Accept":"application/json" } });
+        const j = await r.json();
+        livePre.textContent = JSON.stringify(j, null, 2);
+      } catch(err) {
+        livePre.textContent = "Fehler: " + err;
+      } finally {
+        runBtn.textContent = old;
+        runBtn.disabled = false;
+      }
+    }
+
+    async function debugSku() {
+      const sku = (skuInput.value || "").trim();
+      if (!sku) return;
+      try {
+        const url = baseSyncUrl.replace(/sync-now-open\/?$/, "debug-sku/") + "?sku=" + encodeURIComponent(sku);
+        const r = await fetch(url, { headers: { "Accept":"application/json" } });
+        const j = await r.json();
+        livePre.textContent = JSON.stringify(j, null, 2);
+      } catch(err) {
+        livePre.textContent = "Fehler: " + err;
+      }
+    }
+
+    if (runBtn) runBtn.addEventListener('click', (e) => { e.preventDefault(); runSync(); });
+    if (dbgBtn) dbgBtn.addEventListener('click', (e) => { e.preventDefault(); debugSku(); });
+    if (skuInput) skuInput.addEventListener('keydown', (e) => {
+      if (e.key === "Enter") { e.preventDefault(); debugSku(); }
+    });
+  </script>
+</body>
+</html>
