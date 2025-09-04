@@ -1,52 +1,139 @@
+# inventree_shopify_inventory_sync/plugin.py
+
 from plugin import InvenTreePlugin
-from plugin.mixins import SettingsMixin
+from plugin.mixins import SettingsMixin, UrlsMixin
+from django.urls import path, reverse
+from . import views
 
 
-class ShopifyInventorySyncPlugin(InvenTreePlugin, SettingsMixin):
+class ShopifyInventorySyncPlugin(SettingsMixin, UrlsMixin, InvenTreePlugin):
+    """
+    Shopify → InvenTree Bestandsabgleich (SKU == IPN)
+    """
     NAME = "ShopifyInventorySync"
-    SLUG = "shopify-inventory-sync"  # Mount-Pfad /plugin/shopify-inventory-sync/
-    TITLE = "Shopify Inventory Sync"
-    DESCRIPTION = "Shopify → InvenTree Bestandsabgleich (SKU == IPN)."
-    VERSION = "0.0.42"
+    SLUG = "shopify-inventory-sync"
+    TITLE = "Shopify → InvenTree Inventory Sync (SKU == IPN)"
+    DESCRIPTION = "Liest Bestände aus Shopify (per SKU) und bucht Bestandskorrekturen in InvenTree (IPN-Match)."
+    VERSION = "0.0.51"
     AUTHOR = "GrischaMedia / Grischabock (Sandro Geyer)"
-    WEBSITE = ""
 
-    SETTINGS = {
-        "shop_domain": {"name": "Shopify Shop Domain", "description": "*.myshopify.com (ohne https://)", "default": ""},
-        "admin_token": {"name": "Admin API Token", "description": "Shopify Admin API Access Token", "validator": "string", "default": ""},
-        "use_graphql": {"name": "GraphQL verwenden (true/false)", "description": "Wenn true, GraphQL statt REST.", "validator": "bool", "default": False},
-        "target_location_id": {"name": "InvenTree Ziel-Lagerort (ID)", "description": "Nicht-struktureller Lagerort (z. B. 143).", "validator": "int", "default": 0},
-        "only_location_name": {"name": "Nur Standort (Name)", "description": "Nur diese Shopify-Location zählen (leer = alle).", "default": ""},
-        "auto_sync_minutes": {"name": "Auto-Sync Intervall Minuten", "description": "0 = aus.", "validator": "int", "default": 0},
-        "delta_guard": {"name": "Delta-Guard", "description": "Max. Differenz pro Artikel. 0 = aus.", "validator": "int", "default": 500},
-        "dry_run": {"name": "Dry-Run (true/false)", "description": "Wenn true, keine Buchungen.", "validator": "bool", "default": True},
-        "booking_note": {"name": "Buchungsnotiz", "description": "Text für Stock Adjustments.", "default": "Korrektur durch Onlineshop"},
-        "only_categories": {"name": "Nur Kategorien (IDs, komma-getrennt)", "description": "Nur diese Teil-Kategorien (inkl. Unterkategorien).", "default": ""},
-        "throttle_ms": {"name": "Throttle pro Artikel (ms)", "description": "Wartezeit zwischen Shopify-Requests (429 vermeiden).", "validator": "int", "default": 600},
-        "max_parts_per_run": {"name": "Max. Artikel pro Lauf", "description": "Begrenzt die Anzahl je Sync-Run.", "validator": "int", "default": 60},
-    }
+    URLS = [
+        path("", views.index, name="index"),
+        path("ping/", views.ping, name="ping"),
+        path("sync-now/", views.sync_now, name="sync-now"),
+        path("sync-now-open/", views.sync_now_open, name="sync-now-open"),
+        path("config/", views.settings_form, name="config"),
+        path("debug-sku/", views.debug_sku, name="debug-sku"),
+        path("report-missing/", views.missing_report, name="report-missing"),
+    ]
 
-    # Routen werden DIREKT hier registriert. KEINE urls.py im Paket!
-    def setup_urls(self):
-        from django.urls import path
-        from . import views
+    def get_menu_items(self, request):
+        try:
+            allowed = request.user.is_authenticated and (
+                request.user.is_superuser or request.user.has_perm("stock.change_stockitem")
+            )
+        except Exception:
+            allowed = False
 
+        if not allowed:
+            return []
+
+        ns = f"plugin:{self.SLUG}"
         return [
-            # --- Diagnose: ohne Login, damit kein Redirect alles verschleiert ---
-            path("ping/", views.ping, name="shopify_ping"),
-            path("urls-dump/", views.urls_dump, name="shopify_urls_dump"),
-
-            # --- Deine produktiven JSON-Endpoints (wie gehabt) ---
-            path("sync-now-open/", views.sync_now_open, name="shopify_sync_now"),
-            path("report-missing/", views.report_missing, name="shopify_sync_missing"),
-            path("debug-sku/", views.debug_sku, name="shopify_debug_sku"),
-            path("sync-json/", views.sync_json, name="shopify_sync_json"),
-            path("save-settings/", views.save_settings, name="shopify_sync_save"),
+            {"name": "Shopify Sync – Übersicht", "link": reverse(f"{ns}-index"), "icon": "fa-external-link-alt"},
+            {"name": "Shopify Sync – Config", "link": reverse(f"{ns}-config"), "icon": "fa-cog"},
+            {"name": "Shopify Sync jetzt (open)", "link": reverse(f"{ns}-sync-now-open"), "icon": "fa-sync"},
+            {"name": "Shopify Sync jetzt", "link": reverse(f"{ns}-sync-now"), "icon": "fa-sync"},
+            {"name": "Debug SKU", "link": reverse(f"{ns}-debug-sku") + "?sku=MB-TEST", "icon": "fa-bug"},
+            {"name": "Report fehlende SKUs", "link": reverse(f"{ns}-report-missing"), "icon": "fa-list"},
+            {"name": "Ping", "link": reverse(f"{ns}-ping"), "icon": "fa-circle"},
         ]
 
-    def get_urls(self):
-        return self.setup_urls()
-
-    # „Öffnen“-Link im Plugin-Menü: etwas Harmloses, das sicher existiert
-    def get_plugin_url(self):
-        return f"/plugin/{self.SLUG}/ping/"
+    SETTINGS = {
+        "shop_domain": {
+            "name": "Shopify Shop Domain",
+            "description": "z. B. my-shop.myshopify.com (ohne https://)",
+            "default": "",
+            "type": "string",
+        },
+        "admin_api_token": {
+            "name": "Admin API Token",
+            "description": "Shopify Admin API Access Token",
+            "default": "",
+            "protected": True,
+            "type": "string",
+        },
+        "use_graphql": {
+            "name": "GraphQL verwenden",
+            "description": "REST + GraphQL-Fallback für Variantensuche",
+            "default": True,
+            "type": "boolean",
+        },
+        "inv_target_location": {
+            "name": "InvenTree Ziel-Lagerort (ID)",
+            "description": "Nicht-struktureller Lagerort für Online-Bestand",
+            "default": "",
+            "type": "string",
+        },
+        "restrict_location_name": {
+            "name": "Nur Standort (Name)",
+            "description": "Nur dieser Shopify-Standort wird summiert (optional)",
+            "default": "",
+            "type": "string",
+        },
+        "auto_schedule_minutes": {
+            "name": "Auto-Sync Intervall (Minuten)",
+            "description": "0 = aus",
+            "default": 5,
+            "type": "integer",
+        },
+        "delta_guard": {
+            "name": "Delta-Limit pro Artikel",
+            "description": "0 = aus",
+            "default": 500,
+            "type": "integer",
+        },
+        "dry_run": {
+            "name": "Dry-Run",
+            "description": "Nur lesen, keine Buchungen",
+            "default": True,
+            "type": "boolean",
+        },
+        "note_text": {
+            "name": "Buchungsnotiz",
+            "description": "Notiz für Stock-Adjustments",
+            "default": "Korrektur durch Onlineshop",
+            "type": "string",
+        },
+        "filter_category_ids": {
+            "name": "Nur Kategorien (IDs, komma-getrennt)",
+            "description": "Leerlassen = alle aktiven Teile",
+            "default": "",
+            "type": "string",
+        },
+        "throttle_ms": {
+            "name": "Throttle pro Artikel (ms)",
+            "description": "kleine Pause zwischen Artikeln",
+            "default": 600,
+            "type": "integer",
+        },
+        "max_parts_per_run": {
+            "name": "Max. Artikel pro Lauf",
+            "description": "0 = unlimitiert",
+            "default": 40,
+            "type": "integer",
+        },
+        # Anzeige-Felder (werden von views gepflegt)
+        "last_sync_at": {
+            "name": "Letzter Sync (Zeit)",
+            "description": "Nur Anzeige",
+            "default": "",
+            "type": "string",
+        },
+        "last_sync_result": {
+            "name": "Letzter Sync (Kurzinfo)",
+            "description": "Nur Anzeige",
+            "default": "",
+            "type": "string",
+        },
+    }
